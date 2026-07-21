@@ -12,7 +12,7 @@
 - 右 ⌘ 全局热键（rdev）：按下即录音，松开判定 —— ≥250ms 长按送 ASR、<250ms 短按提交；录音期间按其它键视为组合键用法自动作废
 - 录音：cpal → 16kHz 单声道（边录边流式输出 PCM chunk；批量路径输出 WAV）
 - ASR（默认）：阿里百炼 **fun-asr-realtime**（DashScope 原生 WebSocket 流式协议），边录边传边出字——中间结果实时显示在暂存条，松开后取最终全文**追加**到暂存条（M1 不做 LLM 清洗）
-- ASR（备选）：阿里百炼 qwen3-asr-flash（DashScope HTTP 同步接口，`provider = "bailian"`）
+- ASR（备选）：阿里百炼 qwen3-asr-flash（DashScope HTTP 同步接口，`protocol = "dashscope-http"`）
 - 短按提交：暂存条 → 剪贴板 → 模拟 Cmd+V → 恢复原剪贴板 → 清空暂存条
 - 配置：家目录点文件 `~/.break-your-keyboard.toml`，缺失/无权限时暂存条黄底红字提示
 
@@ -47,11 +47,14 @@ cp config.example.toml ~/.break-your-keyboard.toml
 
 ```toml
 [asr]
-provider = "bailian-realtime"   # WebSocket 流式（默认）；备选 "bailian"（HTTP 整段）
+provider = "bailian"                  # 厂商名
+protocol = "dashscope-realtime"       # 协议适配器：WebSocket 流式（默认）；备选 "dashscope-http"（HTTP 整段）
 model = "fun-asr-realtime"
 base_url = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"   # 工作区 compatible-mode 地址也可，会自动推导
 api_key = "sk-xxx"
 ```
+
+约定：`provider` 是厂商名（分组/文档用），`protocol` 决定代码使用哪个协议适配器；`protocol` 缺省时按旧版 `provider` 写法（如 `bailian-realtime`）向后兼容推断。
 
 也可以用环境变量代替配置文件中的 Key：`export DASHSCOPE_API_KEY=sk-xxx`。
 
@@ -73,7 +76,7 @@ cargo run --example test_asr -- path/to/audio.wav
 ```
 
 - 默认走 realtime 路径：WAV 须为 16kHz 单声道 16bit（可用 `say -o test.wav --data-format=LEI16@16000 "你好，世界"` 生成），会打印中间结果与最终全文
-- `provider = "bailian"` 时整段原字节上传。Key 也可写在配置文件里
+- `protocol = "dashscope-http"` 时整段原字节上传。Key 也可写在配置文件里
 
 ## 代码结构
 

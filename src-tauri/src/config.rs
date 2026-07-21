@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 fn default_asr_provider() -> String {
-    "bailian-realtime".to_string()
+    "bailian".to_string()
 }
 
 fn default_realtime_model() -> String {
@@ -27,13 +27,21 @@ fn default_threshold() -> u64 {
     250
 }
 
-/// ASR 配置。provider 取值：
-/// - `bailian-realtime`（默认）：fun-asr-realtime，DashScope 原生 WebSocket 流式协议
-/// - `bailian`：qwen3-asr-flash，DashScope HTTP 同步接口（M1 方案，备选）
+/// ASR 配置。
+///
+/// `provider` 是厂商名（如 `bailian`），用于文档/分组；`protocol` 决定代码用哪个
+/// 适配器：
+/// - `dashscope-realtime`（默认）：DashScope 原生 WebSocket 流式协议（fun-asr-realtime）
+/// - `dashscope-http`：DashScope HTTP 同步接口（qwen3-asr-flash，M1 方案，备选）
+///
+/// `protocol` 缺省时按旧版 `provider` 写法推断（向后兼容 `bailian-realtime` /
+/// `bailian-http` / `bailian`）。
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsrConfig {
     #[serde(default = "default_asr_provider")]
     pub provider: String,
+    #[serde(default)]
+    pub protocol: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -46,6 +54,7 @@ impl Default for AsrConfig {
     fn default() -> Self {
         Self {
             provider: default_asr_provider(),
+            protocol: None,
             model: None,
             base_url: None,
             api_key: None,
@@ -53,11 +62,16 @@ impl Default for AsrConfig {
     }
 }
 
-/// LLM 配置（M2 清洗层预留，M1/M1.5 仅解析不使用）
+/// LLM 配置（M2 清洗层预留，M1/M1.5 仅解析不使用）。
+///
+/// 与 ASR 同样约定：`provider` 是厂商名，`protocol` 决定适配器
+/// （如 `anthropic-messages` / `openai-chat`）。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct LlmConfig {
     #[serde(default)]
     pub provider: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -122,7 +136,21 @@ impl Config {
             .filter(|k| !k.trim().is_empty())
     }
 
-    /// ASR 模型名（按 provider 给默认值）
+    /// ASR 协议（适配器选择依据）。`protocol` 缺省时按旧版 `provider` 写法推断。
+    pub fn asr_protocol(&self) -> String {
+        if let Some(p) = &self.asr.protocol {
+            return p.clone();
+        }
+        match self.asr.provider.as_str() {
+            // 旧版写法向后兼容
+            "bailian-realtime" | "fun-asr-realtime" => "dashscope-realtime".to_string(),
+            "bailian-http" => "dashscope-http".to_string(),
+            // 新版默认：provider 只表厂商，未显式给 protocol 时用实时协议
+            _ => "dashscope-realtime".to_string(),
+        }
+    }
+
+    /// ASR 模型名（按协议给默认值）
     pub fn asr_model_name(&self) -> String {
         if let Some(m) = &self.asr.model {
             return m.clone();
@@ -130,8 +158,8 @@ impl Config {
         if let Some(m) = &self.asr_model {
             return m.clone();
         }
-        match self.asr.provider.as_str() {
-            "bailian" | "bailian-http" => default_http_model(),
+        match self.asr_protocol().as_str() {
+            "dashscope-http" => default_http_model(),
             _ => default_realtime_model(),
         }
     }

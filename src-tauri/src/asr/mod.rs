@@ -1,6 +1,7 @@
 //! ASR Provider 抽象层。
 //!
-//! PRD 6.4：每家服务商一个适配器（各家 ASR API 格式差异大，不做单一协议假设）。
+//! PRD 6.4：每种协议一个适配器（各家 ASR API 格式差异大，不做单一协议假设）。
+//! 配置中 `provider` 表厂商（文档/分组用），`protocol` 决定用哪个适配器。
 //!
 //! 两种形态：
 //! - 批量（`AsrProvider`）：录完整个 WAV 一次性转写（M1 的 HTTP 方案，保留作备选）
@@ -49,15 +50,17 @@ pub enum AsrBackend {
     Realtime(Arc<dyn RealtimeAsrProvider>),
 }
 
-/// 根据配置构造 ASR 后端。Key 缺失或 provider 未知时返回 None。
+/// 根据配置构造 ASR 后端。Key 缺失或协议未知时返回 None。
+///
+/// dispatch 只看 `protocol`（适配器选择）；`provider` 是厂商名，不参与分发。
 pub fn backend_from_config(cfg: &Config) -> Option<AsrBackend> {
     let key = cfg.asr_api_key()?;
     let model = cfg.asr_model_name();
-    match cfg.asr.provider.as_str() {
-        "bailian" | "bailian-http" => {
-            Some(AsrBackend::Batch(Arc::new(bailian::BailianAsr::new(key, model))))
-        }
-        "bailian-realtime" | "fun-asr-realtime" => {
+    match cfg.asr_protocol().as_str() {
+        "dashscope-http" => Some(AsrBackend::Batch(Arc::new(bailian::BailianAsr::new(
+            key, model,
+        )))),
+        "dashscope-realtime" => {
             match bailian_realtime::BailianRealtimeAsr::new(
                 key,
                 model,
@@ -71,7 +74,7 @@ pub fn backend_from_config(cfg: &Config) -> Option<AsrBackend> {
             }
         }
         other => {
-            eprintln!("[byk] unknown asr provider: {other}");
+            eprintln!("[byk] unknown asr protocol: {other}");
             None
         }
     }

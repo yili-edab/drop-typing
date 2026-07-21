@@ -1,36 +1,32 @@
 # Break Your Keyboard 配置示例
 #
-# 配置文件路径（任选其一，第一个存在的生效）：
-#   1. ~/.break-your-keyboard.toml
-#   2. ~/Library/Application Support/break-your-keyboard/config.toml  (macOS)
+# 复制为家目录下的点文件后填写：
+#   cp config.example.toml ~/.break-your-keyboard.toml
 #
-# API Key 也可以用环境变量 DASHSCOPE_API_KEY 提供（优先级最低）。
+# 约定：provider 是厂商名（分组/文档用），protocol 决定代码使用哪个协议适配器。
+# API Key 也可以用环境变量 DASHSCOPE_API_KEY 提供（优先级低于配置文件）。
 
+# ASR（语音识别）—— 阿里百炼实时识别
 [asr]
-# 服务商适配器：
-#   bailian-realtime（默认）— 阿里百炼 fun-asr-realtime，WebSocket 流式识别，边说边出字
-#   bailian                — 阿里百炼 qwen3-asr-flash，HTTP 同步接口（整段上传，备选）
-provider = "bailian-realtime"
-
-# 模型名（默认 fun-asr-realtime，bailian provider 默认 qwen3-asr-flash）
+provider = "bailian"
+protocol = "dashscope-realtime"   # DashScope 原生 WebSocket 流式协议
 model = "fun-asr-realtime"
-
-# 服务地址。两种写法都可以：
-#   工作区专属：https://ws-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-#     （代码会自动推导为 wss://.../api-ws/v1/inference）
-#   直接写推理端点：wss://dashscope.aliyuncs.com/api-ws/v1/inference
-base_url = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
-
-# 阿里百炼 DashScope API Key（必填）
-# 获取：https://bailian.console.aliyun.com/
+base_url = "wss://your-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# [llm] 段为 M2（LLM 清洗）预留，当前仅解析不使用
+# 备选：百炼 HTTP 同步识别（qwen3-asr-flash，M1 方案）
+# [asr]
+# provider = "bailian"
+# protocol = "dashscope-http"     # HTTP 同步接口
+# model = "qwen3-asr-flash"
+# api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# LLM（文本清洗，M2 使用）—— 百炼 Anthropic 兼容端点
 # [llm]
-# provider = "deepseek"
-# base_url = "https://api.deepseek.com/v1"
-# model = "deepseek-chat"
-# api_key = "sk-xxxxxxxx"
+# provider = "bailian"
+# protocol = "anthropic-messages" # Anthropic Messages API 兼容协议
+# base_url = "https://your-workspace.cn-beijing.maas.aliyuncs.com/apps/anthropic"
+# api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # 长按判定阈值（毫秒，默认 250）：按下右 ⌘ 达到该时长视为长按（录音），
 # 松开时不足该时长视为短按（提交暂存条）。
