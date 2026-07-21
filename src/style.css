@@ -47,6 +47,11 @@ body {
   opacity: 0.45;
 }
 
+/* 实时识别的中间结果（未定稿） */
+#part {
+  opacity: 0.55;
+}
+
 /* 异常态：黄底红字（PRD 3.3） */
 #bar.error {
   background: #ffd60a;

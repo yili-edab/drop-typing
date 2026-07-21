@@ -1,7 +1,12 @@
-//! 基于 cpal 的录音器：输出 16kHz 单声道 16bit WAV 字节。
+//! 基于 cpal 的录音器。
 //!
-//! 设备原生采样率（常见 44.1k/48k）经线性插值重采样到 16kHz，
-//! 多声道取第一声道。M1 足够；后续可换 rubato 提升重采样质量。
+//! 两种用法：
+//! - 批量：`start(None)` → `stop()` 取回 16kHz 单声道 16bit WAV 字节（M1 HTTP 方案）
+//! - 流式：`start(Some(pcm_tx))` → 录音过程中持续把 PCM chunk
+//!   （s16le / 16kHz / mono）发给 `pcm_tx`（实时 ASR 方案）
+//!
+//! 设备原生采样率（常见 44.1k/48k）经线性插值重采样到 16kHz，多声道取第一声道。
+//! 流式重采样用带状态的 `StreamingResampler` 保持跨 chunk 连续性。
 //!
 //! 线程模型：专用音频线程持有 cpal Stream（Stream 在部分平台上不便于跨线程移动），
 //! 通过命令通道接收 Start / Stop / Discard。
@@ -16,7 +21,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 const TARGET_RATE: u32 = 16_000;
 
 enum Command {
-    Start,
+    /// 可选的 PCM 流式输出通道（s16le 16k mono）
+    Start(Option<mpsc::Sender<Vec<u8>>>),
     Stop(mpsc::Sender<Result<Vec<u8>, String>>),
     Discard,
 }
@@ -28,7 +34,6 @@ pub struct AudioRecorder {
 impl AudioRecorder {
     /// 创建录音器并启动音频线程。设备缺失时立即报错。
     pub fn new() -> Result<Self> {
-        // 提前探测输入设备，让错误在启动时暴露
         let host = cpal::default_host();
         if host.default_input_device().is_none() {
             return Err(anyhow!("未找到可用的麦克风设备"));
@@ -40,23 +45,31 @@ impl AudioRecorder {
         Ok(Self { tx })
     }
 
-    /// 开始录音（重复调用会清空已有缓冲重新开始）
-    pub fn start(&self) -> Result<()> {
-        self.tx.send(Command::Start)?;
+    /// 开始录音。传入 `Some(sender)` 时边录边产出 PCM chunk（实时 ASR），
+    /// 传 `None` 时只缓冲（批量 ASR，stop() 取 WAV）。
+    pub fn start(&self, pcm_sink: Option<mpsc::Sender<Vec<u8>>>) -> Result<()> {
+        self.tx.send(Command::Start(pcm_sink))?;
         Ok(())
     }
 
-    /// 停止录音并取回 WAV 字节
+    /// 停止录音并取回 WAV 字节（批量路径）
     pub fn stop(&self) -> Result<Vec<u8>> {
         let (rtx, rrx) = mpsc::channel();
         self.tx.send(Command::Stop(rtx))?;
         rrx.recv()?.map_err(|e| anyhow!(e))
     }
 
-    /// 停止并丢弃（短按 / 修饰键组合触发的录音作废）
+    /// 停止并丢弃（短按 / 组合键作废 / 实时路径不需要 WAV）
     pub fn discard(&self) {
         let _ = self.tx.send(Command::Discard);
     }
+}
+
+/// 录音回调共享状态：f32 原始样本缓冲（批量用）+ 流式输出（实时用）
+struct CaptureState {
+    raw: Vec<f32>,
+    sink: Option<mpsc::Sender<Vec<u8>>>,
+    resampler: Option<StreamingResampler>,
 }
 
 fn audio_thread(rx: mpsc::Receiver<Command>) {
@@ -64,7 +77,6 @@ fn audio_thread(rx: mpsc::Receiver<Command>) {
     let device = match host.default_input_device() {
         Some(d) => d,
         None => {
-            // 设备消失：把所有 Stop 都回错
             for cmd in rx {
                 if let Command::Stop(reply) = cmd {
                     let _ = reply.send(Err("未找到可用的麦克风设备".into()));
@@ -88,25 +100,44 @@ fn audio_thread(rx: mpsc::Receiver<Command>) {
     let in_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let sample_format = config.sample_format();
-    let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let state: Arc<Mutex<CaptureState>> = Arc::new(Mutex::new(CaptureState {
+        raw: Vec::new(),
+        sink: None,
+        resampler: None,
+    }));
     let mut stream: Option<cpal::Stream> = None;
 
     for cmd in rx {
         match cmd {
-            Command::Start => {
-                samples.lock().unwrap().clear();
+            Command::Start(sink) => {
+                {
+                    let mut st = state.lock().unwrap();
+                    st.raw.clear();
+                    st.sink = sink;
+                    st.resampler = st
+                        .sink
+                        .as_ref()
+                        .map(|_| StreamingResampler::new(in_rate, TARGET_RATE));
+                }
                 if stream.is_none() {
-                    stream = build_stream(&device, &config, sample_format, samples.clone());
+                    stream = build_stream(&device, &config, sample_format, channels, state.clone());
                 }
             }
             Command::Stop(reply) => {
                 stream = None; // drop 即停止
-                let data = std::mem::take(&mut *samples.lock().unwrap());
+                let mut st = state.lock().unwrap();
+                st.sink = None;
+                st.resampler = None;
+                let data = std::mem::take(&mut st.raw);
+                drop(st);
                 let _ = reply.send(encode_wav(&data, in_rate, channels));
             }
             Command::Discard => {
                 stream = None;
-                samples.lock().unwrap().clear();
+                let mut st = state.lock().unwrap();
+                st.raw.clear();
+                st.sink = None;
+                st.resampler = None;
             }
         }
     }
@@ -116,42 +147,70 @@ fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     format: cpal::SampleFormat,
-    samples: Arc<Mutex<Vec<f32>>>,
+    channels: usize,
+    state: Arc<Mutex<CaptureState>>,
 ) -> Option<cpal::Stream> {
     let err = |e| eprintln!("[byk] audio stream error: {e}");
     let cfg = config.config();
+
+    // 每个回调：取第一声道 → 缓冲原始样本；如有流式输出则重采样 → s16le → 发送
+    let handle = move |state: &Arc<Mutex<CaptureState>>, frames: &[f32]| {
+        let mut st = state.lock().unwrap();
+        st.raw.extend_from_slice(frames);
+        if st.sink.is_some() {
+            let mono: Vec<f32> = frames
+                .chunks(channels.max(1))
+                .map(|frame| frame[0])
+                .collect();
+            let mut out_f32 = Vec::new();
+            if let Some(rs) = &mut st.resampler {
+                rs.push(&mono, &mut out_f32);
+            }
+            if !out_f32.is_empty() {
+                let mut bytes = Vec::with_capacity(out_f32.len() * 2);
+                for s in out_f32 {
+                    let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                    bytes.extend_from_slice(&v.to_le_bytes());
+                }
+                if let Some(sink) = &st.sink {
+                    let _ = sink.send(bytes); // 接收端退出后失败属正常
+                }
+            }
+        }
+    };
+
     let stream = match format {
         cpal::SampleFormat::F32 => {
-            let buf = samples.clone();
+            let st = state.clone();
             device.build_input_stream(
                 &cfg,
-                move |data: &[f32], _| buf.lock().unwrap().extend_from_slice(data),
+                move |data: &[f32], _| handle(&st, data),
                 err,
                 None,
             )
         }
         cpal::SampleFormat::I16 => {
-            let buf = samples.clone();
+            let st = state.clone();
             device.build_input_stream(
                 &cfg,
                 move |data: &[i16], _| {
-                    let mut b = buf.lock().unwrap();
-                    b.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
+                    let f: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                    handle(&st, &f);
                 },
                 err,
                 None,
             )
         }
         cpal::SampleFormat::U16 => {
-            let buf = samples.clone();
+            let st = state.clone();
             device.build_input_stream(
                 &cfg,
                 move |data: &[u16], _| {
-                    let mut b = buf.lock().unwrap();
-                    b.extend(
-                        data.iter()
-                            .map(|&s| (s as f32 - 32768.0) / 32768.0),
-                    );
+                    let f: Vec<f32> = data
+                        .iter()
+                        .map(|&s| (s as f32 - 32768.0) / 32768.0)
+                        .collect();
+                    handle(&st, &f);
                 },
                 err,
                 None,
@@ -177,7 +236,57 @@ fn build_stream(
     }
 }
 
-/// 取第一声道 → 线性重采样到 16kHz → 16bit WAV
+/// 带状态的线性重采样器：跨 chunk 保持位置连续
+struct StreamingResampler {
+    ratio: f64,   // in_rate / out_rate
+    next_out: u64, // 已输出的样本数
+    base: f64,    // buf[0] 对应的绝对输入位置
+    buf: Vec<f32>,
+}
+
+impl StreamingResampler {
+    fn new(in_rate: u32, out_rate: u32) -> Self {
+        Self {
+            ratio: in_rate as f64 / out_rate as f64,
+            next_out: 0,
+            base: 0.0,
+            buf: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
+        self.buf.extend_from_slice(input);
+        loop {
+            let p = self.next_out as f64 * self.ratio;
+            let idx = p - self.base;
+            if idx < 0.0 {
+                self.next_out += 1;
+                continue;
+            }
+            let i = idx as usize;
+            if i + 1 >= self.buf.len() {
+                break; // 等更多输入
+            }
+            let frac = (idx - i as f64) as f32;
+            let a = self.buf[i];
+            let b = self.buf[i + 1];
+            out.push(a + (b - a) * frac);
+            self.next_out += 1;
+        }
+        // 丢弃不再使用的前缀（保留最后 2 个样本保证插值连续）
+        if self.buf.len() > 8192 {
+            let p = self.next_out as f64 * self.ratio;
+            let keep_from = ((p - self.base) as usize).saturating_sub(2);
+            if keep_from > 0 {
+                let n = keep_from.min(self.buf.len());
+                self.buf.drain(..n);
+                self.base += n as f64;
+            }
+        }
+    }
+}
+
+/// 批量路径：取第一声道 → 线性重采样到 16kHz → 16bit WAV
 fn encode_wav(samples: &[f32], in_rate: u32, channels: usize) -> Result<Vec<u8>, String> {
     if samples.is_empty() {
         return Err("没有录到音频（麦克风权限未授予？）".into());

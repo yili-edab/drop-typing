@@ -87,6 +87,13 @@ impl Staging {
             .emit("byk://busy", serde_json::json!({ "busy": busy }));
     }
 
+    /// 实时识别的中间结果（累积全文，前端弱化样式展示）
+    pub fn partial(&self, text: &str) {
+        let _ = self
+            .app
+            .emit("byk://partial", serde_json::json!({ "text": text }));
+    }
+
     /// 异常提示（PRD 3.3：整条黄底红字）
     pub fn error(&self, message: &str) {
         *self.last_error.lock().unwrap() = Some(message.to_string());

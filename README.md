@@ -10,8 +10,9 @@
 - 暂存条浮层：屏幕底部居中、无边框、置顶、全工作区可见、不抢焦点（忽略鼠标事件）、多行自适应高度、深浅色跟随系统
 - 录音反馈：CSS 波形动画（无提示音）；异常时整条黄底红字
 - 右 ⌘ 全局热键（rdev）：按下即录音，松开判定 —— ≥250ms 长按送 ASR、<250ms 短按提交；录音期间按其它键视为组合键用法自动作废
-- 录音：cpal → 16kHz 单声道 16bit WAV（线性重采样）
-- ASR：阿里百炼 Qwen3-ASR-Flash（DashScope 同步接口，base64 data URL 直传），结果**追加**到暂存条（M1 不做 LLM 清洗）
+- 录音：cpal → 16kHz 单声道（边录边流式输出 PCM chunk；批量路径输出 WAV）
+- ASR（默认）：阿里百炼 **fun-asr-realtime**（DashScope 原生 WebSocket 流式协议），边录边传边出字——中间结果实时显示在暂存条，松开后取最终全文**追加**到暂存条（M1 不做 LLM 清洗）
+- ASR（备选）：阿里百炼 qwen3-asr-flash（DashScope HTTP 同步接口，`provider = "bailian"`）
 - 短按提交：暂存条 → 剪贴板 → 模拟 Cmd+V → 恢复原剪贴板 → 清空暂存条
 - 配置：家目录点文件 `~/.break-your-keyboard.toml`，缺失/无权限时暂存条黄底红字提示
 
@@ -35,16 +36,26 @@ npm run tauri dev
 
 ## 配置 API Key
 
-配置文件路径：家目录下的点文件 `~/.break-your-keyboard.toml`
+配置文件路径（任选其一，第一个存在的生效）：家目录点文件 `~/.break-your-keyboard.toml`（推荐），或 `~/Library/Application Support/break-your-keyboard/config.toml`。
 
 ```bash
 cp config.example.toml ~/.break-your-keyboard.toml
-# 编辑文件，填入 dashscope_api_key（https://bailian.console.aliyun.com/ 获取）
+# 编辑文件，填入 [asr].api_key（https://bailian.console.aliyun.com/ 获取）
 ```
 
-也可以用环境变量代替配置文件：`export DASHSCOPE_API_KEY=sk-xxx`。
+最小配置：
 
-API Key 仅存本地，绝不上传到除 DashScope 接口以外的任何地方。
+```toml
+[asr]
+provider = "bailian-realtime"   # WebSocket 流式（默认）；备选 "bailian"（HTTP 整段）
+model = "fun-asr-realtime"
+base_url = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"   # 工作区 compatible-mode 地址也可，会自动推导
+api_key = "sk-xxx"
+```
+
+也可以用环境变量代替配置文件中的 Key：`export DASHSCOPE_API_KEY=sk-xxx`。
+
+API Key 仅存本地，绝不上传到除百炼接口以外的任何地方。
 
 ## 权限说明（macOS）
 
@@ -58,10 +69,11 @@ API Key 仅存本地，绝不上传到除 DashScope 接口以外的任何地方�
 ## 手动测试 ASR（不需要启动 App）
 
 ```bash
-DASHSCOPE_API_KEY=sk-xxx cargo run --example test_asr -- path/to/audio.wav
+cargo run --example test_asr -- path/to/audio.wav
 ```
 
-WAV 建议 16kHz 单声道（其它格式会按原字节直接上传）。Key 也可写在 config.toml 里。
+- 默认走 realtime 路径：WAV 须为 16kHz 单声道 16bit（可用 `say -o test.wav --data-format=LEI16@16000 "你好，世界"` 生成），会打印中间结果与最终全文
+- `provider = "bailian"` 时整段原字节上传。Key 也可写在配置文件里
 
 ## 代码结构
 
@@ -75,11 +87,12 @@ break-your-keyboard/
 │   │   ├── lib.rs               # 窗口创建（无边框/置顶/全工作区/忽略鼠标）+ 启动
 │   │   ├── pipeline.rs          # 编排：热键 → 录音 → ASR → 暂存条 → 提交
 │   │   ├── staging.rs           # 暂存条状态（文本归属 Rust 侧）
-│   │   ├── config.rs            # config.toml 加载（env 回退）
-│   │   ├── asr/                 # ASR 抽象：trait AsrProvider + 适配器
+│   │   ├── config.rs            # 配置加载（[asr]/[llm] 段 + legacy/env 回退）
+│   │   ├── asr/                 # ASR 抽象：批量/实时两套 trait + 每家一个适配器
 │   │   │   ├── mod.rs
-│   │   │   └── bailian.rs       #   阿里百炼 Qwen3-ASR-Flash
-│   │   ├── audio/recorder.rs    # cpal 录音 → 16kHz 单声道 WAV
+│   │   │   ├── bailian.rs       #   百炼 qwen3-asr-flash（HTTP，备选）
+│   │   │   └── bailian_realtime.rs # 百炼 fun-asr-realtime（WebSocket 流式，默认）
+│   │   ├── audio/recorder.rs    # cpal 录音 → 流式 PCM chunk / 整段 WAV
 │   │   ├── hotkey/              # 热键抽象：trait HotkeySource（平台相关）
 │   │   │   ├── mod.rs
 │   │   │   └── macos.rs         #   rdev 全局监听 + 辅助功能权限检测

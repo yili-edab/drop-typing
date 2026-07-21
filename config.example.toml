@@ -1,16 +1,36 @@
 # Break Your Keyboard 配置示例
 #
-# 复制为家目录下的点文件后填写：
-#   cp config.example.toml ~/.break-your-keyboard.toml
+# 配置文件路径（任选其一，第一个存在的生效）：
+#   1. ~/.break-your-keyboard.toml
+#   2. ~/Library/Application Support/break-your-keyboard/config.toml  (macOS)
 #
-# 也可以用环境变量 DASHSCOPE_API_KEY 提供 Key（优先级低于配置文件）。
+# API Key 也可以用环境变量 DASHSCOPE_API_KEY 提供（优先级最低）。
+
+[asr]
+# 服务商适配器：
+#   bailian-realtime（默认）— 阿里百炼 fun-asr-realtime，WebSocket 流式识别，边说边出字
+#   bailian                — 阿里百炼 qwen3-asr-flash，HTTP 同步接口（整段上传，备选）
+provider = "bailian-realtime"
+
+# 模型名（默认 fun-asr-realtime，bailian provider 默认 qwen3-asr-flash）
+model = "fun-asr-realtime"
+
+# 服务地址。两种写法都可以：
+#   工作区专属：https://ws-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+#     （代码会自动推导为 wss://.../api-ws/v1/inference）
+#   直接写推理端点：wss://dashscope.aliyuncs.com/api-ws/v1/inference
+base_url = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 
 # 阿里百炼 DashScope API Key（必填）
-# 获取地址：https://bailian.console.aliyun.com/
-dashscope_api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# 获取：https://bailian.console.aliyun.com/
+api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# ASR 模型（默认 qwen3-asr-flash，一般无需修改）
-# asr_model = "qwen3-asr-flash"
+# [llm] 段为 M2（LLM 清洗）预留，当前仅解析不使用
+# [llm]
+# provider = "deepseek"
+# base_url = "https://api.deepseek.com/v1"
+# model = "deepseek-chat"
+# api_key = "sk-xxxxxxxx"
 
 # 长按判定阈值（毫秒，默认 250）：按下右 ⌘ 达到该时长视为长按（录音），
 # 松开时不足该时长视为短按（提交暂存条）。

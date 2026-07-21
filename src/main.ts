@@ -1,11 +1,13 @@
 import { listen, emit } from "@tauri-apps/api/event";
 
 const bar = document.getElementById("bar") as HTMLDivElement;
-const textEl = document.getElementById("text") as HTMLDivElement;
+const finalEl = document.getElementById("final") as HTMLSpanElement;
+const partEl = document.getElementById("part") as HTMLSpanElement;
 
 const PLACEHOLDER = "按住右 ⌘ 说话，短按提交";
 
 let currentText = "";
+let partialText = "";
 let committedTimer: number | undefined;
 
 function resize() {
@@ -17,19 +19,29 @@ function resize() {
 
 function renderText() {
   bar.classList.remove("error");
-  if (currentText.trim().length === 0) {
+  if (currentText.trim().length === 0 && partialText.trim().length === 0) {
     bar.classList.add("placeholder");
-    textEl.textContent = PLACEHOLDER;
+    finalEl.textContent = PLACEHOLDER;
+    partEl.textContent = "";
   } else {
     bar.classList.remove("placeholder");
-    textEl.textContent = currentText;
+    finalEl.textContent = currentText;
+    partEl.textContent = partialText;
   }
   resize();
 }
 
-// 暂存条文本更新（追加/清空）
+// 暂存条文本更新（追加/清空）—— 定稿内容，同时清掉中间结果
 listen<{ text: string }>("byk://staging", (e) => {
   currentText = e.payload.text;
+  partialText = "";
+  renderText();
+});
+
+// 实时识别的中间结果（句内累积，弱化样式）
+listen<{ text: string }>("byk://partial", (e) => {
+  partialText = e.payload.text;
+  bar.classList.remove("error");
   renderText();
 });
 
@@ -48,7 +60,8 @@ listen<{ busy: boolean }>("byk://busy", (e) => {
 listen<{ message: string }>("byk://error", (e) => {
   bar.classList.remove("placeholder", "busy", "recording");
   bar.classList.add("error");
-  textEl.textContent = e.payload.message;
+  finalEl.textContent = e.payload.message;
+  partEl.textContent = "";
   resize();
 });
 
