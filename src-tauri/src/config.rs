@@ -1,7 +1,4 @@
-//! 用户级配置：config.toml
-//!
-//! 路径：`<系统配置目录>/break-your-keyboard/config.toml`
-//! macOS 上即 `~/Library/Application Support/break-your-keyboard/config.toml`。
+//! 用户级配置：`~/.break-your-keyboard.toml`（家目录下的点文件）
 //!
 //! API Key 也可以由环境变量 `DASHSCOPE_API_KEY` 提供（配置文件优先）。
 
@@ -43,10 +40,9 @@ impl Default for Config {
 impl Config {
     /// 配置文件路径
     pub fn path() -> PathBuf {
-        dirs::config_dir()
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("break-your-keyboard")
-            .join("config.toml")
+            .join(".break-your-keyboard.toml")
     }
 
     /// 宽松加载：永远返回一份可用配置 + 可选的告警信息。

@@ -13,7 +13,7 @@
 - 录音：cpal → 16kHz 单声道 16bit WAV（线性重采样）
 - ASR：阿里百炼 Qwen3-ASR-Flash（DashScope 同步接口，base64 data URL 直传），结果**追加**到暂存条（M1 不做 LLM 清洗）
 - 短按提交：暂存条 → 剪贴板 → 模拟 Cmd+V → 恢复原剪贴板 → 清空暂存条
-- 配置：用户级 `config.toml`，缺失/无权限时暂存条黄底红字提示
+- 配置：家目录点文件 `~/.break-your-keyboard.toml`，缺失/无权限时暂存条黄底红字提示
 
 ## 环境依赖
 
@@ -35,15 +35,10 @@ npm run tauri dev
 
 ## 配置 API Key
 
-配置文件路径（macOS）：
-
-```
-~/Library/Application Support/break-your-keyboard/config.toml
-```
+配置文件路径：家目录下的点文件 `~/.break-your-keyboard.toml`
 
 ```bash
-mkdir -p "$HOME/Library/Application Support/break-your-keyboard"
-cp config.example.toml "$HOME/Library/Application Support/break-your-keyboard/config.toml"
+cp config.example.toml ~/.break-your-keyboard.toml
 # 编辑文件，填入 dashscope_api_key（https://bailian.console.aliyun.com/ 获取）
 ```
 
