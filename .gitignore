@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/
+
+# Local config (never commit real API keys)
+config.toml
+
+# macOS
+.DS_Store
+
+# Logs / temp
+*.log
+/tmp/

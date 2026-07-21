@@ -1,0 +1,104 @@
+/* Break Your Keyboard — 暂存条样式（M1） */
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Helvetica Neue", sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px;
+  padding: 12px 18px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(28, 28, 30, 0.88);
+  color: #f2f2f7;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-color-scheme: light) {
+  #bar {
+    background: rgba(255, 255, 255, 0.88);
+    color: #1c1c1e;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+  }
+}
+
+/* 占位提示文本 */
+#bar.placeholder #text {
+  opacity: 0.45;
+}
+
+/* 异常态：黄底红字（PRD 3.3） */
+#bar.error {
+  background: #ffd60a;
+  color: #d70015;
+}
+
+/* 提交成功瞬间的绿色闪烁反馈 */
+#bar.committed {
+  transition: background 0.15s ease;
+  background: rgba(52, 199, 89, 0.9);
+  color: #ffffff;
+}
+
+/* 波形动画（录音时显示） */
+#wave {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  flex: none;
+}
+
+#bar.recording #wave {
+  display: flex;
+}
+
+#wave span {
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: #ff453a;
+  transform-origin: center;
+  animation: wave 0.9s ease-in-out infinite;
+}
+
+#wave span:nth-child(1) { animation-delay: 0s; }
+#wave span:nth-child(2) { animation-delay: 0.15s; }
+#wave span:nth-child(3) { animation-delay: 0.3s; }
+#wave span:nth-child(4) { animation-delay: 0.45s; }
+#wave span:nth-child(5) { animation-delay: 0.6s; }
+
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.25); }
+  50% { transform: scaleY(1); }
+}
+
+/* 转写中的呼吸效果 */
+#bar.busy #text {
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
