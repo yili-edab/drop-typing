@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    break_your_keyboard_lib::run()
+    napkeys_lib::run()
 }

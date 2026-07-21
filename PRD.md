@@ -1,10 +1,11 @@
-# Break Your Keyboard — 产品需求文档（PRD）
+# napkeys — 产品需求文档（PRD）
 
-> 版本：v0.4（ASR 切换到阿里百炼）
+> 版本：v0.5（产品定名 napkeys）
 > 日期：2026-07-22
-> 状态：需求已确认，待开发
+> 状态：需求已确认，开发中
 >
 > 变更记录：
+> - v0.5：产品正式定名 **napkeys**（小写），原开发代号 Break Your Keyboard 废弃
 > - v0.4：ASR 从 SiliconFlow 切换为阿里百炼 Qwen3-ASR-Flash（DashScope 接口，支持上下文偏置）；ASR Provider 抽象改为每家一个适配器；指令语义通道原则写入 4.3
 > - v0.3：七个产品问题定稿（暂存条外观、波形反馈、指令机制、异常提示、语言检测等）；"Break Your Keyboard"确认为代号，正式名未定
 > - v0.2：交互模型从"直接注入"改为"暂存区模式"；热键映射定稿；注入定为粘贴模式
@@ -20,7 +21,7 @@
 
 项目以**开源**形式发布（License：MIT），所有模型与服务商均由用户自行配置。
 
-> 注：**Break Your Keyboard 为开发代号**，正式产品名未定。
+> 注：产品正式名为 **napkeys**（Break Your Keyboard 为已废弃的开发代号）。
 
 ## 2. 目标用户与场景
 
@@ -253,7 +254,7 @@
 | 指令表 | 内置仅复制/粘贴/回车；其余靠"组合键直说"（如 Shift+Command+E） |
 | 识别语言 | 自动检测中英文 |
 | 异常提示 | 暂存条整体黄色背景 + 红色错误文字 |
-| 产品名 | Break Your Keyboard 为代号，正式名未定 |
+| 产品名 | 正式定名 **napkeys**（原代号 Break Your Keyboard 废弃） |
 
 ## 10. 风险
 

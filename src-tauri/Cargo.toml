@@ -1,12 +1,12 @@
 [package]
-name = "break-your-keyboard"
+name = "napkeys"
 version = "0.1.0"
 description = "按住说话、松手出字的语音输入工具（M1）"
 edition = "2021"
 rust-version = "1.77.2"
 
 [lib]
-name = "break_your_keyboard_lib"
+name = "napkeys_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -1,9 +1,8 @@
 //! 用户级配置。
 //!
 //! 配置文件查找顺序（第一个存在的生效）：
-//! 1. `~/.break-your-keyboard.toml`
-//! 2. `<系统配置目录>/break-your-keyboard/config.toml`
-//!    （macOS：`~/Library/Application Support/break-your-keyboard/config.toml`）
+//! 1. `~/.napkeys.toml`
+//! 2. `~/.break-your-keyboard.toml`（旧代号遗留，向后兼容，读取时提示改名）
 //!
 //! API Key 解析顺序：`[asr].api_key` → 旧版顶层 `dashscope_api_key` → 环境变量 `DASHSCOPE_API_KEY`。
 
@@ -114,12 +113,18 @@ impl Config {
     pub fn candidate_paths() -> Vec<PathBuf> {
         let mut v = Vec::new();
         if let Some(home) = dirs::home_dir() {
+            v.push(home.join(".napkeys.toml"));
+            // 旧代号遗留路径（产品未发布前的 M1 用户），向后兼容
             v.push(home.join(".break-your-keyboard.toml"));
         }
-        if let Some(cfg) = dirs::config_dir() {
-            v.push(cfg.join("break-your-keyboard").join("config.toml"));
-        }
         v
+    }
+
+    /// 是否为旧代号遗留路径
+    fn is_legacy_path(path: &std::path::Path) -> bool {
+        path.file_name()
+            .map(|n| n == ".break-your-keyboard.toml")
+            .unwrap_or(false)
     }
 
     /// 实际使用的配置文件路径（第一个存在的）
@@ -169,7 +174,14 @@ impl Config {
         let (mut cfg, warning) = match Self::path() {
             Some(path) => match std::fs::read_to_string(&path) {
                 Ok(raw) => match toml::from_str::<Config>(&raw) {
-                    Ok(c) => (c, None),
+                    Ok(c) => {
+                        let warn = Self::is_legacy_path(&path).then(|| {
+                            "检测到旧配置文件 ~/.break-your-keyboard.toml（产品已更名为 napkeys），\
+                             建议执行：mv ~/.break-your-keyboard.toml ~/.napkeys.toml"
+                                .to_string()
+                        });
+                        (c, warn)
+                    }
                     Err(e) => (
                         Config::default(),
                         Some(format!(
@@ -185,14 +197,11 @@ impl Config {
             },
             None => (
                 Config::default(),
-                Some(format!(
-                    "未找到配置文件（{}）。请创建并填入 ASR API Key；或设置环境变量 DASHSCOPE_API_KEY。",
-                    Self::candidate_paths()
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(" 或 ")
-                )),
+                Some(
+                    "未找到配置文件 ~/.napkeys.toml。请创建并填入 ASR API Key；\
+                     或设置环境变量 DASHSCOPE_API_KEY。"
+                        .to_string(),
+                ),
             ),
         };
 

@@ -1,4 +1,4 @@
-//! Break Your Keyboard — M1
+//! napkeys — M1
 //!
 //! 模块边界（为 M2 LLM 清洗 / M3 修正通道 / M4 指令通道预留）：
 //! - `asr/`     ASR Provider 抽象（trait + 每家服务商一个适配器）
@@ -36,7 +36,7 @@ pub fn run() {
                 "staging",
                 WebviewUrl::App("index.html".into()),
             )
-            .title("Break Your Keyboard")
+            .title("napkeys")
             .inner_size(WIN_WIDTH, MIN_HEIGHT)
             .resizable(false)
             .decorations(false)
@@ -66,9 +66,9 @@ pub fn run() {
             }
             let _ = window.show();
 
-            // 前端测量内容高度后通过 "byk://resize" 请求调整窗口高度（多行自适应）
+            // 前端测量内容高度后通过 "napkeys://resize" 请求调整窗口高度（多行自适应）
             let win = window.clone();
-            app.listen("byk://resize", move |event| {
+            app.listen("napkeys://resize", move |event| {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(event.payload()) {
                     if let Some(h) = v.get("height").and_then(|h| h.as_f64()) {
                         let h = h.clamp(MIN_HEIGHT, MAX_HEIGHT);

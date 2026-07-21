@@ -58,7 +58,7 @@ pub fn start(app: AppHandle) {
 
     // 前端加载完成后请求重发状态（启动早期的事件可能在前端监听注册前发出）
     let staging_for_ready = staging.clone();
-    app.listen("byk://ready", move |_| staging_for_ready.republish());
+    app.listen("napkeys://ready", move |_| staging_for_ready.republish());
 
     let (tx, rx) = mpsc::channel::<HotkeyEvent>();
     let staging_for_listener = staging.clone();

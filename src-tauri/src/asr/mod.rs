@@ -68,13 +68,13 @@ pub fn backend_from_config(cfg: &Config) -> Option<AsrBackend> {
             ) {
                 Ok(p) => Some(AsrBackend::Realtime(Arc::new(p))),
                 Err(e) => {
-                    eprintln!("[byk] realtime asr init failed: {e}");
+                    eprintln!("[napkeys] realtime asr init failed: {e}");
                     None
                 }
             }
         }
         other => {
-            eprintln!("[byk] unknown asr protocol: {other}");
+            eprintln!("[napkeys] unknown asr protocol: {other}");
             None
         }
     }

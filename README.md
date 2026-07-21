@@ -1,8 +1,8 @@
-# Break Your Keyboard
+# napkeys
 
 > 按住说话、松手出字的语音输入工具（macOS）。当前进度：**M1**。
 >
-> 代号 Break Your Keyboard（正式名未定），开源协议 MIT。产品细节见 [PRD.md](PRD.md)。
+> 开源协议 MIT。产品细节见 [PRD.md](PRD.md)。
 
 ## M1 已实现
 
@@ -14,7 +14,7 @@
 - ASR（默认）：阿里百炼 **fun-asr-realtime**（DashScope 原生 WebSocket 流式协议），边录边传边出字——中间结果实时显示在暂存条，松开后取最终全文**追加**到暂存条（M1 不做 LLM 清洗）
 - ASR（备选）：阿里百炼 qwen3-asr-flash（DashScope HTTP 同步接口，`protocol = "dashscope-http"`）
 - 短按提交：暂存条 → 剪贴板 → 模拟 Cmd+V → 恢复原剪贴板 → 清空暂存条
-- 配置：家目录点文件 `~/.break-your-keyboard.toml`，缺失/无权限时暂存条黄底红字提示
+- 配置：家目录点文件 `~/.napkeys.toml`，缺失/无权限时暂存条黄底红字提示
 
 ## 环境依赖
 
@@ -27,7 +27,7 @@
 ## 安装与运行
 
 ```bash
-git clone <repo> && cd break-your-keyboard
+git clone <repo> && cd napkeys
 npm install
 npm run tauri dev
 ```
@@ -36,10 +36,10 @@ npm run tauri dev
 
 ## 配置 API Key
 
-配置文件路径（任选其一，第一个存在的生效）：家目录点文件 `~/.break-your-keyboard.toml`（推荐），或 `~/Library/Application Support/break-your-keyboard/config.toml`。
+配置文件路径：家目录点文件 `~/.napkeys.toml`（旧代号遗留的 `~/.break-your-keyboard.toml` 仍向后兼容读取，启动时会提示改名）。
 
 ```bash
-cp config.example.toml ~/.break-your-keyboard.toml
+cp config.example.toml ~/.napkeys.toml
 # 编辑文件，填入 [asr].api_key（https://bailian.console.aliyun.com/ 获取）
 ```
 
@@ -81,7 +81,7 @@ cargo run --example test_asr -- path/to/audio.wav
 ## 代码结构
 
 ```
-break-your-keyboard/
+napkeys/
 ├── index.html / src/            # 暂存条前端（Vite + 原生 TS）
 │   ├── main.ts                  #   事件订阅、渲染、高度自适应
 │   └── style.css                #   深浅色、波形动画、黄底红字异常态

@@ -43,7 +43,7 @@ impl BailianRealtimeAsr {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
-            .thread_name("byk-asr-ws")
+            .thread_name("napkeys-asr-ws")
             .build()?;
         Ok(Self {
             api_key,

@@ -239,31 +239,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "break-your-keyboard"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "async-trait",
- "base64 0.22.1",
- "cpal",
- "dirs 5.0.1",
- "enigo",
- "futures-util",
- "hound",
- "rdev",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
- "tokio-tungstenite",
- "toml 0.8.23",
- "uuid",
-]
-
-[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2326,6 +2301,31 @@ dependencies = [
  "serde",
  "thiserror 2.0.19",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "napkeys"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-trait",
+ "base64 0.22.1",
+ "cpal",
+ "dirs 5.0.1",
+ "enigo",
+ "futures-util",
+ "hound",
+ "rdev",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
+ "tokio-tungstenite",
+ "toml 0.8.23",
+ "uuid",
 ]
 
 [[package]]
