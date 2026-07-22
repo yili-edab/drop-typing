@@ -40,7 +40,7 @@ pub fn start(app: AppHandle) {
     let staging = Staging::new(app.clone());
     let (cfg, warning) = Config::load_lenient();
     let backend = asr::backend_from_config(&cfg);
-    let injector = inject::default_injector();
+    let injector = inject::default_injector(app.clone());
     let source = hotkey::default_source();
 
     // 启动诊断：配置 / 权限问题直接以黄底红字显示在暂存条

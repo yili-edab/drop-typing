@@ -18,6 +18,6 @@ pub trait Injector: Send + Sync {
 
 /// 当前平台的默认注入实现
 #[cfg(target_os = "macos")]
-pub fn default_injector() -> Box<dyn Injector> {
-    Box::new(macos::MacosInjector)
+pub fn default_injector(app: tauri::AppHandle) -> Box<dyn Injector> {
+    Box::new(macos::MacosInjector::new(app))
 }
