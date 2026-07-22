@@ -1,4 +1,4 @@
-# napkeys
+# drop-typing
 
 > 按住说话、松手出字的语音输入工具（macOS）。当前进度：**M1**。
 >
@@ -14,7 +14,7 @@
 - ASR（默认）：阿里百炼 **fun-asr-realtime**（DashScope 原生 WebSocket 流式协议），边录边传边出字——中间结果实时显示在暂存条，松开后取最终全文**追加**到暂存条（M1 不做 LLM 清洗）
 - ASR（备选）：阿里百炼 qwen3-asr-flash（DashScope HTTP 同步接口，`protocol = "dashscope-http"`）
 - 短按提交：暂存条 → 剪贴板 → 模拟 Cmd+V → 恢复原剪贴板 → 清空暂存条
-- 配置：家目录点文件 `~/.napkeys.toml`，缺失/无权限时暂存条黄底红字提示
+- 配置：家目录点文件 `~/.drop-typing.toml`，缺失/无权限时暂存条黄底红字提示
 
 ## 环境依赖
 
@@ -27,7 +27,7 @@
 ## 安装与运行
 
 ```bash
-git clone <repo> && cd napkeys
+git clone <repo> && cd drop-typing
 npm install
 npm run tauri dev
 ```
@@ -36,10 +36,10 @@ npm run tauri dev
 
 ## 配置 API Key
 
-配置文件路径：家目录点文件 `~/.napkeys.toml`（旧代号遗留的 `~/.break-your-keyboard.toml` 仍向后兼容读取，启动时会提示改名）。
+配置文件路径：家目录点文件 `~/.drop-typing.toml`。
 
 ```bash
-cp config.example.toml ~/.napkeys.toml
+cp config.example.toml ~/.drop-typing.toml
 # 编辑文件，填入 [asr].api_key（https://bailian.console.aliyun.com/ 获取）
 ```
 
@@ -81,7 +81,7 @@ cargo run --example test_asr -- path/to/audio.wav
 ## 代码结构
 
 ```
-napkeys/
+drop-typing/
 ├── index.html / src/            # 暂存条前端（Vite + 原生 TS）
 │   ├── main.ts                  #   事件订阅、渲染、高度自适应
 │   └── style.css                #   深浅色、波形动画、黄底红字异常态

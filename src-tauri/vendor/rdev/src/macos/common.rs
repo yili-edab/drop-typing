@@ -89,7 +89,7 @@ pub type QCallback = unsafe extern "C" fn(
 pub unsafe fn convert(
     _type: CGEventType,
     cg_event: &CGEvent,
-    _keyboard_state: &mut Keyboard, // napkeys patch: unused after removing TIS string conversion
+    _keyboard_state: &mut Keyboard, // drop-typing patch: unused after removing TIS string conversion
 ) -> Option<Event> {
     let option_type = match _type {
         CGEventType::LeftMouseDown => Some(EventType::ButtonPress(Button::Left)),
@@ -133,7 +133,7 @@ pub unsafe fn convert(
         _ => None,
     };
     if let Some(event_type) = option_type {
-        // napkeys patch: do not call TIS/TSM input-source APIs from the
+        // drop-typing patch: do not call TIS/TSM input-source APIs from the
         // CGEventTap background thread. macOS 26 asserts these run on the
         // main thread (dispatch_assert_queue -> EXC_BREAKPOINT). The `name`
         // field is unused by this app, so we skip string conversion entirely.

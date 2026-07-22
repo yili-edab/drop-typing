@@ -1,12 +1,12 @@
 [package]
-name = "napkeys"
+name = "drop-typing"
 version = "0.1.0"
 description = "按住说话、松手出字的语音输入工具（M1）"
 edition = "2021"
 rust-version = "1.77.2"
 
 [lib]
-name = "napkeys_lib"
+name = "drop_typing_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -35,9 +35,9 @@ rdev = "0.5"
 enigo = "0.2"
 arboard = "3"
 
-# napkeys: vendor rdev 0.5.3 补丁 —— 移除 CGEventTap 后台线程中对 TIS/TSM
+# drop-typing: vendor rdev 0.5.3 补丁 —— 移除 CGEventTap 后台线程中对 TIS/TSM
 # 输入法 API 的调用（macOS 26 主线程断言导致 EXC_BREAKPOINT）。详见
-# vendor/rdev/src/macos/common.rs 中的 "napkeys patch" 注释。
+# vendor/rdev/src/macos/common.rs 中的 "drop-typing patch" 注释。
 # 注意：cargo update 时 rdev 会被锁定在 0.5.3；若上游修复可移除此 patch。
 [patch.crates-io]
 rdev = { path = "vendor/rdev" }

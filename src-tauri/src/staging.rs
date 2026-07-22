@@ -30,13 +30,13 @@ impl Staging {
         if let Some(e) = err {
             let _ = self
                 .app
-                .emit("napkeys://error", serde_json::json!({ "message": e }));
+                .emit("drop-typing://error", serde_json::json!({ "message": e }));
         }
     }
 
     fn emit_text(&self) {
         let text = self.text.lock().unwrap().clone();
-        let _ = self.app.emit("napkeys://staging", serde_json::json!({ "text": text }));
+        let _ = self.app.emit("drop-typing://staging", serde_json::json!({ "text": text }));
     }
 
     /// 追加一段转写结果（PRD 3.3：多次录音追加在已有内容之后）
@@ -77,21 +77,21 @@ impl Staging {
     pub fn set_recording(&self, recording: bool) {
         let _ = self
             .app
-            .emit("napkeys://recording", serde_json::json!({ "recording": recording }));
+            .emit("drop-typing://recording", serde_json::json!({ "recording": recording }));
     }
 
     /// 转写中状态
     pub fn set_busy(&self, busy: bool) {
         let _ = self
             .app
-            .emit("napkeys://busy", serde_json::json!({ "busy": busy }));
+            .emit("drop-typing://busy", serde_json::json!({ "busy": busy }));
     }
 
     /// 实时识别的中间结果（累积全文，前端弱化样式展示）
     pub fn partial(&self, text: &str) {
         let _ = self
             .app
-            .emit("napkeys://partial", serde_json::json!({ "text": text }));
+            .emit("drop-typing://partial", serde_json::json!({ "text": text }));
     }
 
     /// 异常提示（PRD 3.3：整条黄底红字）
@@ -99,11 +99,11 @@ impl Staging {
         *self.last_error.lock().unwrap() = Some(message.to_string());
         let _ = self
             .app
-            .emit("napkeys://error", serde_json::json!({ "message": message }));
+            .emit("drop-typing://error", serde_json::json!({ "message": message }));
     }
 
     /// 提交成功反馈
     pub fn committed(&self) {
-        let _ = self.app.emit("napkeys://committed", ());
+        let _ = self.app.emit("drop-typing://committed", ());
     }
 }

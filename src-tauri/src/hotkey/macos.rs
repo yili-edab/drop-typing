@@ -25,7 +25,7 @@ pub struct RdevHotkey;
 impl HotkeySource for RdevHotkey {
     fn start(self: Box<Self>, tx: mpsc::Sender<HotkeyEvent>) -> Result<()> {
         std::thread::Builder::new()
-            .name("napkeys-hotkey".into())
+            .name("drop-typing-hotkey".into())
             .spawn(move || {
                 let result = rdev::listen(move |event| {
                     let ev = match event.event_type {
@@ -41,7 +41,7 @@ impl HotkeySource for RdevHotkey {
                     }
                 });
                 if let Err(e) = result {
-                    eprintln!("[napkeys] rdev listen error: {e:?}（辅助功能权限未授予？）");
+                    eprintln!("[drop-typing] rdev listen error: {e:?}（辅助功能权限未授予？）");
                 }
             })?;
         Ok(())

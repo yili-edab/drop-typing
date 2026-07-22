@@ -3,8 +3,7 @@
 //! 用法：
 //!   cargo run --example test_asr -- path/to/audio.wav
 //!
-//! - 配置读取顺序与 App 一致：~/.napkeys.toml →
-//!   ~/.break-your-keyboard.toml（旧代号兼容）→ 环境变量 DASHSCOPE_API_KEY
+//! - 配置读取与 App 一致：~/.drop-typing.toml → 环境变量 DASHSCOPE_API_KEY
 //! - provider = bailian-realtime（默认）：要求 WAV 为 16kHz 单声道 16bit，
 //!   模拟实时流（每 100ms 送 3200 字节），打印中间结果与最终全文
 //! - provider = bailian：整段 WAV 一次性上传（原始字节直传）
@@ -13,8 +12,8 @@ use std::io::Write as _;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use napkeys_lib::asr::{self, AsrBackend};
-use napkeys_lib::config::Config;
+use drop_typing_lib::asr::{self, AsrBackend};
+use drop_typing_lib::config::Config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

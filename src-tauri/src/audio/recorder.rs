@@ -40,7 +40,7 @@ impl AudioRecorder {
         }
         let (tx, rx) = mpsc::channel::<Command>();
         std::thread::Builder::new()
-            .name("napkeys-audio".into())
+            .name("drop-typing-audio".into())
             .spawn(move || audio_thread(rx))?;
         Ok(Self { tx })
     }
@@ -150,7 +150,7 @@ fn build_stream(
     channels: usize,
     state: Arc<Mutex<CaptureState>>,
 ) -> Option<cpal::Stream> {
-    let err = |e| eprintln!("[napkeys] audio stream error: {e}");
+    let err = |e| eprintln!("[drop-typing] audio stream error: {e}");
     let cfg = config.config();
 
     // 每个回调：取第一声道 → 缓冲原始样本；如有流式输出则重采样 → s16le → 发送
@@ -217,20 +217,20 @@ fn build_stream(
             )
         }
         other => {
-            eprintln!("[napkeys] unsupported sample format: {other}");
+            eprintln!("[drop-typing] unsupported sample format: {other}");
             return None;
         }
     };
     match stream {
         Ok(s) => {
             if let Err(e) = s.play() {
-                eprintln!("[napkeys] stream play failed: {e}");
+                eprintln!("[drop-typing] stream play failed: {e}");
                 return None;
             }
             Some(s)
         }
         Err(e) => {
-            eprintln!("[napkeys] build input stream failed: {e}");
+            eprintln!("[drop-typing] build input stream failed: {e}");
             None
         }
     }

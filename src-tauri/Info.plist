@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>napkeys 需要麦克风权限来录制语音输入。</string>
+  <string>drop-typing 需要麦克风权限来录制语音输入。</string>
   <key>NSAppleEventsUsageDescription</key>
-  <string>napkeys 需要模拟粘贴操作，将语音输入的文字注入到当前应用。</string>
+  <string>drop-typing 需要模拟粘贴操作，将语音输入的文字注入到当前应用。</string>
 </dict>
 </plist>
