@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::command::Modifier;
+
 fn default_asr_provider() -> String {
     "bailian".to_string()
 }
@@ -26,6 +28,86 @@ fn default_threshold() -> u64 {
 
 fn default_double_press_window() -> u64 {
     350
+}
+
+fn default_command_countdown() -> u64 {
+    2000
+}
+
+// ── 语音指令词表条目类型（M4）──────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommandActionEntry {
+    pub phrase: String,
+    #[serde(default)]
+    pub modifiers: Vec<Modifier>,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommandModifierEntry {
+    pub phrase: String,
+    pub modifier: Modifier,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommandKeyEntry {
+    pub phrase: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommandStopEntry {
+    pub phrase: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommandHomophoneEntry {
+    pub phrase: String,
+    pub letter: String,
+}
+
+/// 语音指令配置（M4 指令通道）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CommandConfig {
+    /// 倒计时毫秒（可选，覆盖顶层 command_countdown_ms）
+    #[serde(default)]
+    pub countdown_ms: Option<u64>,
+    /// 动作别名：说 phrase → 按 modifiers + key
+    #[serde(default)]
+    pub action: Vec<CommandActionEntry>,
+    /// 修饰键别名
+    #[serde(default)]
+    pub modifier: Vec<CommandModifierEntry>,
+    /// 按键别名
+    #[serde(default)]
+    pub key: Vec<CommandKeyEntry>,
+    /// 停用词（填充词/连接词）
+    #[serde(default)]
+    pub stop: Vec<CommandStopEntry>,
+    /// 字母谐音（ASR 把英文字母识别成汉字时的映射）
+    #[serde(default)]
+    pub homophone: Vec<CommandHomophoneEntry>,
+}
+
+// Modifier 自定义 Deserialize：接受大小写不敏感 + 历史别名。
+// 文档推荐只用 Cmd / Ctrl / Opt / Shift，但代码兼容所有写法。
+impl<'de> Deserialize<'de> for Modifier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.to_ascii_lowercase().as_str() {
+            "command" | "cmd" | "meta" | "super" | "win" => Ok(Modifier::Command),
+            "shift" => Ok(Modifier::Shift),
+            "control" | "ctrl" | "ctl" => Ok(Modifier::Control),
+            "option" | "opt" | "alt" => Ok(Modifier::Option),
+            _ => Err(serde::de::Error::custom(format!(
+                "无法识别的修饰键 '{s}'。可选：Cmd, Ctrl, Opt, Shift（大小写不敏感）"
+            ))),
+        }
+    }
 }
 
 /// ASR 配置。
@@ -90,6 +172,9 @@ pub struct Config {
     pub asr: AsrConfig,
     #[serde(default)]
     pub llm: LlmConfig,
+    /// 语音指令（M4 指令通道）
+    #[serde(default)]
+    pub command: CommandConfig,
     /// 旧版（M1）顶层 Key，向后兼容
     #[serde(default)]
     pub dashscope_api_key: Option<String>,
@@ -102,6 +187,9 @@ pub struct Config {
     /// 双击清空暂存条窗口（毫秒），默认 150ms
     #[serde(default = "default_double_press_window")]
     pub double_press_window_ms: u64,
+    /// 语音指令确认倒计时（毫秒，M4）：指令解析完成后在暂存条上倒计时，到 0 自动执行
+    #[serde(default = "default_command_countdown")]
+    pub command_countdown_ms: u64,
 }
 
 impl Default for Config {
@@ -113,6 +201,8 @@ impl Default for Config {
             asr_model: None,
             long_press_threshold_ms: default_threshold(),
             double_press_window_ms: default_double_press_window(),
+            command_countdown_ms: default_command_countdown(),
+            command: CommandConfig::default(),
         }
     }
 }
@@ -182,6 +272,11 @@ impl Config {
             .clone()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "standard".to_string())
+    }
+
+    /// 指令通道有效倒计时（M4）：`[command].countdown_ms` 优先，否则顶层字段兜底
+    pub fn effective_command_countdown_ms(&self) -> u64 {
+        self.command.countdown_ms.unwrap_or(self.command_countdown_ms)
     }
 
     /// 宽松加载：永远返回一份可用配置 + 可选的告警信息。

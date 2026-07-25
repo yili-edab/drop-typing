@@ -6,7 +6,7 @@
 
 **drop-typing** 是一款 macOS 桌面语音输入工具（MIT 协议）：**按住右 ⌘ 说话、松手出字**。ASR（语音识别）结果先进入屏幕底部的**暂存条**（staging bar），用户确认后**短按右 ⌘** 通过剪贴板 + 模拟 Cmd+V 粘贴到当前聚焦 App。
 
-当前进度：**M2**（LLM 清洗层 + 优化强度档位；无设置界面、暂存条只读）。后续里程碑（语音修正 M3、语音指令/设置界面 M4）见 PRD.md。
+当前进度：**M4 指令通道**（M2 清洗层 + 语音修正通道 + 右 ⇧ 语音指令；设置界面/权限引导未做、暂存条只读）。后续里程碑（M3 手动编辑/自动确认、M4 设置界面、M5 打磨发布）见 PRD.md。
 
 技术栈：
 
@@ -40,6 +40,7 @@ cargo run --example test_llm -- "要清洗的文本"      # LLM 清洗独立手�
 - `[llm]`（M2 清洗层）同样约定：`protocol` 决定适配器（`openai-chat` 默认 / `anthropic-messages`），`strength` 为优化强度档位（`conservative` / `standard` 默认）；**不配置 `[llm]` 或缺 api_key 即关闭清洗、ASR 直出**
 - API Key 可用环境变量 `DASHSCOPE_API_KEY` 提供（优先级低于配置文件，仅对 ASR 生效）
 - `long_press_threshold_ms`：长按/短按判定阈值，默认 250ms
+- `command_countdown_ms`：语音指令确认倒计时（M4），默认 2000ms；指令解析完成后在暂存条大字展示并倒计时，到 0 自动模拟按键
 
 macOS 权限：辅助功能（热键监听 + 模拟粘贴）与麦克风（录音）都必须授予。**dev 模式下授权的是运行 `npm run tauri dev` 的终端**，打包后的 .app 授权 App 本身；dev 模式裸二进制没有 Info.plist，部分系统版本无法弹窗申请麦克风，遇录音为空时用打包的 .app 验证。
 
@@ -57,6 +58,7 @@ src-tauri/
 │   ├── staging.rs           # 暂存条状态 + 窗口显隐/锚点定位/resize（文本归属 Rust 侧，前端只渲染）
 │   ├── caret.rs             # 光标屏幕位置查询（macOS AX API，手写 extern 声明）
 │   ├── config.rs            # 配置加载（[asr]/[llm] 段 + legacy/env 回退）
+│   ├── command.rs           # 语音指令解析（M4）：词表驱动扫描提取（中文/谐音/填充词容忍），纯本地不过 LLM
 │   ├── asr/                 # ASR 抽象：批量/实时两套 trait + 每家一个适配器
 │   │   ├── bailian.rs       #   百炼 qwen3-asr-flash（HTTP 同步，备选）
 │   │   └── bailian_realtime.rs  # 百炼 fun-asr-realtime（WebSocket 流式，默认）
@@ -68,7 +70,7 @@ src-tauri/
 │   ├── hotkey/              # trait HotkeySource（平台相关）
 │   │   └── macos.rs         #   rdev 全局监听 + 辅助功能权限检测
 │   └── inject/              # trait Injector（平台相关）
-│       └── macos.rs         #   arboard 剪贴板 + enigo 模拟 Cmd+V
+│       └── macos.rs         #   arboard 剪贴板 + enigo 按键模拟（Cmd+V / 任意按键组合）
 ├── examples/test_asr.rs     # ASR 独立手动测试入口
 ├── examples/test_llm.rs     # LLM 清洗独立手动测试入口
 └── tauri.conf.json / capabilities/default.json / Info.plist / icons/
@@ -93,6 +95,7 @@ src-tauri/
 - **AX 符号手写 extern 声明**（`#[link(name = "ApplicationServices")]`，见 `hotkey/macos.rs` / `caret.rs`），不要为此引入 accessibility crate
 - 窗口定位/resize/显隐统一由 `staging.rs` 持有（锚点模式 Bottom/Caret 决定长高方向）；`lib.rs` 只负责窗口创建
 - 录音期间按下任何其它键视为组合键用法，本次录音自动作废
+- **指令通道（右 ⇧，M4）**：ASR 结果走 `command.rs` 本地解析（别名表 + 组合键直说，不过 LLM）→ 暂存条大字展示 + 右侧秒级倒计时 → 自动 `injector.simulate_combo`；倒计时期间按下任意右修饰键（开始新录音）通过 `pipeline` 的代次计数（`command_gen`）取消执行；按键模拟与 Cmd+V 一样必须调度到主线程（macOS 26 TSM 断言）
 
 ## 安全注意事项
 

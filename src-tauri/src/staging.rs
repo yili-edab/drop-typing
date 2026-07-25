@@ -108,6 +108,7 @@ impl Staging {
         let _ = self.app.emit("drop-typing://busy", serde_json::json!({ "busy": false }));
         let _ = self.app.emit("drop-typing://recording", serde_json::json!({ "recording": false }));
         let _ = self.app.emit("drop-typing://repair-note", serde_json::json!({ "text": "" }));
+        let _ = self.app.emit("drop-typing://command-clear", ());
     }
 
     // ---------- 状态与文本 ----------
@@ -178,6 +179,26 @@ impl Staging {
         let _ = self
             .app
             .emit("drop-typing://repair-note", serde_json::json!({ "text": text }));
+    }
+
+    /// 展示识别出的按键指令（M4）：大字显示 + 右侧秒级倒计时
+    pub fn show_command(&self, display: &str, seconds: u64) {
+        let _ = self.app.emit(
+            "drop-typing://command",
+            serde_json::json!({ "text": display, "seconds": seconds }),
+        );
+    }
+
+    /// 指令倒计时每秒更新
+    pub fn command_tick(&self, seconds: u64) {
+        let _ = self
+            .app
+            .emit("drop-typing://command-tick", serde_json::json!({ "seconds": seconds }));
+    }
+
+    /// 清除指令展示（执行完毕 / 新录音开始 / 关闭按钮）
+    pub fn clear_command(&self) {
+        let _ = self.app.emit("drop-typing://command-clear", ());
     }
 
     /// 录音状态（前端波形动画）

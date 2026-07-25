@@ -27,6 +27,10 @@ pub enum HotkeyEvent {
     RepairDown,
     /// 右 ⌥ 松开
     RepairUp,
+    /// 右 ⇧ 按下（指令通道，M4）
+    CommandDown,
+    /// 右 ⇧ 松开
+    CommandUp,
     /// 录音期间有其它键按下（说明右修饰键被当作组合键修饰键使用，应当作废本次录音）
     OtherKeyDown,
     /// 监听器运行时错误（如权限被收回）

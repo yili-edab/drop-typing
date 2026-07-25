@@ -49,3 +49,61 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # 双击窗口（毫秒，默认 350）：第一次短按松手后，在该时长内再次短按松手
 # 视为双击（清空暂存条）；超时未等到第二击则确认为单击（提交暂存条）。
 # double_press_window_ms = 350
+
+# 语音指令确认倒计时（毫秒，默认 2000）：长按右 ⇧ 说出按键指令（如"复制"、
+# "Shift Command E"）解析完成后，在暂存条上大字展示指令并倒计时，到 0 自动模拟
+# 该按键；倒计时期间按下任意右修饰键（开始新录音）可取消执行。
+# command_countdown_ms = 2000
+
+# -----------------------------------------------------------
+# 语音指令词表自定义（M4 指令通道）
+#
+# 未配置任何段时使用内置词表。用户追加的条目优先匹配，内置兜底。
+#
+# 修饰键（大小写不敏感）：
+#   Cmd  → ⌘ Command
+#   Opt  → ⌥ Option
+#   Ctrl → ⌃ Control
+#   Shift→ ⇧ Shift
+#
+# 键名（统一大写）：
+#   字母/数字     A-Z, 0-9
+#   功能键        ENTER, SPACE, TAB, ESC, DELETE
+#   方向键        UP, DOWN, LEFT, RIGHT
+#   F 键          F1, F2 ... F12
+#
+# 五种条目类型：
+#   [[command.action]]    动作别名：说“截图” → 按 Shift+Cmd+4
+#   [[command.modifier]]  修饰键别名：说“win” → 识别为 Cmd
+#   [[command.key]]       按键别名：说“去除” → 识别为 DELETE
+#   [[command.stop]]      停用词：说“给我按复制”中的“给我”被丢弃
+#   [[command.homophone]] 字母谐音：ASR 把字母 A 识别成“挨”时的映射
+# -----------------------------------------------------------
+
+# [command]
+# # countdown_ms = 3000  # 可选，覆盖上方的 command_countdown_ms
+
+# # 动作别名
+# [[command.action]]
+# phrase = "截图"
+# modifiers = ["Shift", "Cmd"]
+# key = "4"
+
+# # 修饰键别名
+# [[command.modifier]]
+# phrase = "win"
+# modifier = "Cmd"
+
+# # 按键别名
+# [[command.key]]
+# phrase = "去除"
+# name = "DELETE"
+
+# # 停用词
+# [[command.stop]]
+# phrase = "给我"
+
+# # 字母谐音
+# [[command.homophone]]
+# phrase = "挨"
+# letter = "A"

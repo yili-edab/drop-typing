@@ -18,6 +18,7 @@ use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use tauri::AppHandle;
 
 use super::Injector;
+use crate::command::{KeyCombo, Modifier};
 
 pub struct MacosInjector {
     app: AppHandle,
@@ -35,17 +36,29 @@ impl MacosInjector {
 
     /// 在 主线程 上执行 Cmd+V 按键模拟并等待结果。
     fn simulate_paste(&self) -> Result<()> {
+        let combo = KeyCombo {
+            modifiers: vec![Modifier::Command],
+            key: "V".to_string(),
+        };
+        self.run_on_main_thread(move || simulate_combo_on_main(&combo))
+    }
+
+    /// macOS 26 起按键模拟必须在主线程执行（见文件头注释）。
+    fn run_on_main_thread<F>(&self, f: F) -> Result<()>
+    where
+        F: FnOnce() -> Result<()> + Send + 'static,
+    {
         if thread::current().id() == self.main_tid {
-            return simulate_paste_on_main();
+            return f();
         }
         let (tx, rx) = mpsc::channel();
         self.app
             .run_on_main_thread(move || {
-                let _ = tx.send(simulate_paste_on_main());
+                let _ = tx.send(f());
             })
-            .context("无法将粘贴按键模拟调度到主线程")?;
+            .context("无法将按键模拟调度到主线程")?;
         rx.recv_timeout(Duration::from_secs(5))
-            .context("等待主线程执行粘贴超时")?
+            .context("等待主线程执行按键模拟超时")?
     }
 }
 
@@ -70,12 +83,66 @@ impl Injector for MacosInjector {
 
         paste_result
     }
+
+    fn simulate_combo(&self, combo: &KeyCombo) -> Result<()> {
+        let combo = combo.clone();
+        self.run_on_main_thread(move || simulate_combo_on_main(&combo))
+    }
 }
 
-fn simulate_paste_on_main() -> Result<()> {
+/// 键名（command.rs 的规范化形式）→ enigo 键位
+fn enigo_key(name: &str) -> Result<Key> {
+    // 单个字母 / 数字：Unicode 键
+    if name.len() == 1 {
+        let c = name.chars().next().unwrap();
+        if c.is_ascii_alphanumeric() {
+            return Ok(Key::Unicode(c.to_ascii_lowercase()));
+        }
+    }
+    match name {
+        "ENTER" => Ok(Key::Return),
+        "SPACE" => Ok(Key::Space),
+        "TAB" => Ok(Key::Tab),
+        "ESC" => Ok(Key::Escape),
+        "DELETE" => Ok(Key::Backspace),
+        "UP" => Ok(Key::UpArrow),
+        "DOWN" => Ok(Key::DownArrow),
+        "LEFT" => Ok(Key::LeftArrow),
+        "RIGHT" => Ok(Key::RightArrow),
+        "F1" => Ok(Key::F1),
+        "F2" => Ok(Key::F2),
+        "F3" => Ok(Key::F3),
+        "F4" => Ok(Key::F4),
+        "F5" => Ok(Key::F5),
+        "F6" => Ok(Key::F6),
+        "F7" => Ok(Key::F7),
+        "F8" => Ok(Key::F8),
+        "F9" => Ok(Key::F9),
+        "F10" => Ok(Key::F10),
+        "F11" => Ok(Key::F11),
+        "F12" => Ok(Key::F12),
+        _ => anyhow::bail!("不支持的键名：{name}"),
+    }
+}
+
+fn modifier_key(m: &Modifier) -> Key {
+    match m {
+        Modifier::Command => Key::Meta,
+        Modifier::Shift => Key::Shift,
+        Modifier::Control => Key::Control,
+        Modifier::Option => Key::Option,
+    }
+}
+
+/// 按下全部修饰键 → Click 目标键 → 逆序松开修饰键
+fn simulate_combo_on_main(combo: &KeyCombo) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default()).context("无法创建键盘模拟器")?;
-    enigo.key(Key::Meta, Direction::Press)?;
-    enigo.key(Key::Unicode('v'), Direction::Click)?;
-    enigo.key(Key::Meta, Direction::Release)?;
+    for m in &combo.modifiers {
+        enigo.key(modifier_key(m), Direction::Press)?;
+    }
+    enigo.key(enigo_key(&combo.key)?, Direction::Click)?;
+    for m in combo.modifiers.iter().rev() {
+        enigo.key(modifier_key(m), Direction::Release)?;
+    }
     Ok(())
 }

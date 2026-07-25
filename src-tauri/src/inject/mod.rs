@@ -11,9 +11,13 @@ pub mod macos;
 
 use anyhow::Result;
 
+use crate::command::KeyCombo;
+
 pub trait Injector: Send + Sync {
     /// 将文本粘贴到当前聚焦 App 的光标处
     fn paste_text(&self, text: &str) -> Result<()>;
+    /// 模拟一组按键（M4 指令通道，如 CMD+C / SHIFT+CMD+E / ENTER）
+    fn simulate_combo(&self, combo: &KeyCombo) -> Result<()>;
 }
 
 /// 当前平台的默认注入实现

@@ -1,4 +1,4 @@
-/* drop-typing — 暂存条样式（M2） */
+/* drop-typing — 暂存条样式 */
 
 :root {
   color-scheme: light dark;
@@ -210,4 +210,50 @@ body {
   background: #ffffff;
   color: #3d1c00;
   box-shadow: 0 4px 24px rgba(255, 160, 40, 0.45);
+}
+
+/* ---- 按键指令展示（M4 指令通道）---- */
+
+#command {
+  display: none;
+}
+
+/* 指令模式：隐藏普通文本，大字展示指令，与普通录入文字明确区分 */
+#bar.command-mode #final,
+#bar.command-mode #part,
+#bar.command-mode #repair-note {
+  display: none;
+}
+
+#bar.command-mode #command {
+  display: block;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+/* 右侧秒级倒计时徽章 */
+#countdown {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+#countdown.visible {
+  display: flex;
+}
+
+@media (prefers-color-scheme: light) {
+  #countdown {
+    background: rgba(0, 0, 0, 0.10);
+  }
 }

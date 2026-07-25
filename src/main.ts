@@ -6,6 +6,8 @@ const finalEl = document.getElementById("final") as HTMLSpanElement;
 const partEl = document.getElementById("part") as HTMLSpanElement;
 const statusEl = document.getElementById("status") as HTMLDivElement;
 const repairNoteEl = document.getElementById("repair-note") as HTMLDivElement;
+const commandEl = document.getElementById("command") as HTMLDivElement;
+const countdownEl = document.getElementById("countdown") as HTMLDivElement;
 
 const PLACEHOLDER = "按住右 ⌘ 说话，短按提交";
 const BAR_MAX_HEIGHT = 260;
@@ -84,6 +86,33 @@ listen<{ text: string }>("drop-typing://repair-note", (e) => {
   const text = e.payload.text;
   repairNoteEl.textContent = text ? `修复意见：${text}` : "";
   repairNoteEl.classList.toggle("visible", text.length > 0);
+  resize();
+});
+
+// 按键指令展示（M4 指令通道）：大字 + 右侧秒级倒计时
+listen<{ text: string; seconds: number }>("drop-typing://command", (e) => {
+  currentText = "";
+  partialText = "";
+  bar.classList.remove("placeholder", "error");
+  bar.classList.add("command-mode");
+  commandEl.textContent = e.payload.text;
+  countdownEl.textContent = e.payload.seconds > 0 ? String(e.payload.seconds) : "";
+  countdownEl.classList.toggle("visible", e.payload.seconds > 0);
+  resize();
+});
+
+// 指令倒计时每秒更新
+listen<{ seconds: number }>("drop-typing://command-tick", (e) => {
+  countdownEl.textContent = e.payload.seconds > 0 ? String(e.payload.seconds) : "";
+  countdownEl.classList.toggle("visible", e.payload.seconds > 0);
+});
+
+// 清除指令展示（执行完毕 / 新录音开始 / 关闭按钮）
+listen("drop-typing://command-clear", () => {
+  bar.classList.remove("command-mode");
+  commandEl.textContent = "";
+  countdownEl.textContent = "";
+  countdownEl.classList.remove("visible");
   resize();
 });
 

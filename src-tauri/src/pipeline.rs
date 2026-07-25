@@ -15,6 +15,7 @@
 //! LLM 清洗（未配置 `[llm]` 时直出，清洗失败降级为原文追加）。
 
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,17 +24,29 @@ use tauri::{AppHandle, Listener};
 
 use crate::asr::{self, AsrBackend, RealtimeSession};
 use crate::audio::AudioRecorder;
+use crate::command;
 use crate::config::Config;
 use crate::hotkey::{self, HotkeyEvent};
 use crate::inject::{self, Injector};
 use crate::llm::{self, TextCleaner};
 use crate::staging::Staging;
 
-/// 录音目的：输入通道（右 ⌘）还是修正通道（右 ⌥）。
+/// 录音目的：输入通道（右 ⌘）、修正通道（右 ⌥）还是指令通道（右 ⇧，M4）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RecordMode {
     Input,
     Repair,
+    Command,
+}
+
+impl RecordMode {
+    /// 识别期间状态徽章文案
+    fn recognizing_label(self) -> &'static str {
+        match self {
+            RecordMode::Input | RecordMode::Repair => "识别中",
+            RecordMode::Command => "指令识别中",
+        }
+    }
 }
 
 enum State {
@@ -60,6 +73,7 @@ pub fn start(app: AppHandle) {
     let cleaner = llm::cleaner_from_config(&cfg);
     let injector = inject::default_injector(app.clone());
     let source = hotkey::default_source();
+    let lexicon = Arc::new(command::Lexicon::build(Some(&cfg.command)));
 
     // 启动诊断：配置 / 权限问题直接以黄底红字显示在暂存条
     if let Some(w) = warning {
@@ -87,7 +101,7 @@ pub fn start(app: AppHandle) {
     });
 
     std::thread::spawn(move || {
-        run_loop(cfg, backend, cleaner, injector, staging, rx);
+        run_loop(cfg, backend, cleaner, injector, staging, rx, lexicon);
     });
 }
 
@@ -98,6 +112,7 @@ fn run_loop(
     injector: Box<dyn Injector>,
     staging: Staging,
     rx: mpsc::Receiver<HotkeyEvent>,
+    lexicon: Arc<command::Lexicon>,
 ) {
     let recorder = match AudioRecorder::new() {
         Ok(r) => Some(r),
@@ -113,15 +128,19 @@ fn run_loop(
     let strength = llm::Strength::from_config(&cfg.llm_strength());
     let poll_interval = Duration::from_millis(50); // 轮询阈值到期
     let double_press = Duration::from_millis(cfg.double_press_window_ms); // 双击窗口（可配置）
+    let command_countdown = Duration::from_millis(cfg.effective_command_countdown_ms()); // 指令确认倒计时（M4）
+    let injector: Arc<dyn Injector> = Arc::from(injector); // 指令倒计时线程需要共享 injector
+    // 指令代次：每次新录音/新指令 bump，倒计时线程执行前比对，防串台
+    let command_gen = Arc::new(AtomicU64::new(0));
 
     loop {
         match rx.recv_timeout(poll_interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // 按住期间：超阈值即显示"识别中"（不等松手）
-                if let State::Recording { started, .. } = &state {
+                if let State::Recording { started, mode, .. } = &state {
                     if started.elapsed() >= threshold {
                         staging.set_busy(true);
-                        staging.set_status("识别中");
+                        staging.set_status(mode.recognizing_label());
                     }
                 }
                 // PendingCommit 超时未等到第二击 → 确认单击，提交
@@ -143,7 +162,7 @@ fn run_loop(
                 }
             }
 
-            HotkeyEvent::TriggerDown | HotkeyEvent::RepairDown => {
+            HotkeyEvent::TriggerDown | HotkeyEvent::RepairDown | HotkeyEvent::CommandDown => {
                 // 若在 PendingCommit 状态 → 提取第一击时间，进入录音；
                 // 若已在录音中 → 另一个修饰键按下，taint
                 let carry_pending = match &state {
@@ -157,10 +176,10 @@ fn run_loop(
                     State::Idle => None,
                 };
 
-                let mode = if matches!(ev, HotkeyEvent::RepairDown) {
-                    RecordMode::Repair
-                } else {
-                    RecordMode::Input
+                let mode = match ev {
+                    HotkeyEvent::RepairDown => RecordMode::Repair,
+                    HotkeyEvent::CommandDown => RecordMode::Command,
+                    _ => RecordMode::Input,
                 };
 
                 let Some(r) = &recorder else {
@@ -168,9 +187,12 @@ fn run_loop(
                     continue;
                 };
 
+                // 任何新录音开始都取消尚未执行的指令倒计时
+                command_gen.fetch_add(1, Ordering::SeqCst);
                 staging.clear_error();
                 staging.partial("");
                 staging.set_repair_note(""); // 清除上次修正的修复意见
+                staging.clear_command(); // 清除上次指令的展示/倒计时
                 staging.show();
 
                 // 创建 PCM 通道，录音立即开始
@@ -185,7 +207,7 @@ fn run_loop(
                         std::thread::spawn(move || {
                             for text in prx {
                                 match mode {
-                                    RecordMode::Input => st.partial(&text),
+                                    RecordMode::Input | RecordMode::Command => st.partial(&text),
                                     // 修复模式：直接走 repair-note 独立元素（特殊背景色）
                                     RecordMode::Repair => st.set_repair_note(&text),
                                 }
@@ -253,7 +275,7 @@ fn run_loop(
                 };
             }
 
-            HotkeyEvent::TriggerUp | HotkeyEvent::RepairUp => {
+            HotkeyEvent::TriggerUp | HotkeyEvent::RepairUp | HotkeyEvent::CommandUp => {
                 let State::Recording {
                     started,
                     tainted,
@@ -316,8 +338,8 @@ fn run_loop(
                                 state = State::PendingCommit { since: Instant::now() };
                             }
                         }
-                        // 右 ⌥ 短按无动作（PRD 第 5 节）
-                        RecordMode::Repair => {
+                        // 右 ⌥ / 右 ⇧ 短按无动作（PRD 第 5 节）
+                        RecordMode::Repair | RecordMode::Command => {
                             staging.set_repair_note("");
                             staging.hide();
                         }
@@ -328,7 +350,7 @@ fn run_loop(
                         (Some(b), Some(s)) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
                             r.discard(); // 实时路径不需要本地 WAV
                             staging.set_busy(true);
-                            staging.set_status("识别中");
+                            staging.set_status(mode.recognizing_label());
                             let result = s.finish();
                             staging.set_busy(false);
                             match result {
@@ -340,6 +362,14 @@ fn run_loop(
                                         RecordMode::Repair => {
                                             repair_and_replace(&staging, &cleaner, text.trim())
                                         }
+                                        RecordMode::Command => run_command(
+                                            &staging,
+                                            &injector,
+                                            text.trim(),
+                                            command_countdown,
+                                            &command_gen,
+                                            &lexicon,
+                                        ),
                                     }
                                 }
                                 Ok(_) => {
@@ -368,6 +398,7 @@ fn run_loop(
                             match r.stop() {
                                 Ok(wav) => spawn_transcribe(
                                     &staging, p.clone(), &cleaner, strength, mode, wav,
+                                    &injector, command_countdown, &command_gen, lexicon.clone(),
                                 ),
                                 Err(e) => {
                                     staging.set_status("");
@@ -409,6 +440,7 @@ fn commit(staging: &Staging, injector: &dyn Injector) {
 }
 
 /// 批量后端：整段 WAV 异步转写
+#[allow(clippy::too_many_arguments)]
 fn spawn_transcribe(
     staging: &Staging,
     provider: Arc<dyn asr::AsrProvider>,
@@ -416,11 +448,17 @@ fn spawn_transcribe(
     strength: llm::Strength,
     mode: RecordMode,
     wav: Vec<u8>,
+    injector: &Arc<dyn Injector>,
+    command_countdown: Duration,
+    command_gen: &Arc<AtomicU64>,
+    lexicon: Arc<command::Lexicon>,
 ) {
     let staging = staging.clone();
     let cleaner = cleaner.clone();
+    let injector = injector.clone();
+    let command_gen = command_gen.clone();
     staging.set_busy(true);
-    staging.set_status("识别中");
+    staging.set_status(mode.recognizing_label());
     tauri::async_runtime::spawn(async move {
         let ctx = staging.text();
         let ctx = if ctx.trim().is_empty() { None } else { Some(ctx) };
@@ -434,6 +472,14 @@ fn spawn_transcribe(
                 RecordMode::Repair => {
                     repair_and_replace(&staging, &cleaner, text.trim())
                 }
+                RecordMode::Command => run_command(
+                    &staging,
+                    &injector,
+                    text.trim(),
+                    command_countdown,
+                    &command_gen,
+                    &lexicon,
+                ),
             },
             Ok(_) => {
                 staging.set_status("");
@@ -530,6 +576,63 @@ fn repair_and_replace(
             }
             Err(e) => {
                 staging.error(&format!("修正失败，已保留原文：{e:#}"));
+            }
+        }
+    });
+}
+
+/// 指令通道（M4）：ASR 文本 → 本地解析 → 暂存条大字展示 + 右侧秒级倒计时 → 自动模拟按键。
+///
+/// 倒计时期间用户按下任意一个右修饰键（开始新录音）即作废本次指令：
+/// 通过 `gen` 代次比对实现（Down 事件会 bump 代次）。
+fn run_command(
+    staging: &Staging,
+    injector: &Arc<dyn Injector>,
+    text: &str,
+    countdown: Duration,
+    gen: &Arc<AtomicU64>,
+    lexicon: &command::Lexicon,
+) {
+    staging.set_status("");
+    let combo = match command::parse(text, lexicon) {
+        Some(c) => c,
+        None => {
+            staging.error(&format!("未识别到按键指令：{text}"));
+            return;
+        }
+    };
+
+    // 倒计时秒数（不足 1 秒按 1 秒计；配 0 则立即执行）
+    let mut remaining = (countdown.as_millis() as u64 + 999) / 1000;
+    staging.show_command(&combo.display(), remaining);
+
+    let staging = staging.clone();
+    let injector = injector.clone();
+    let gen = gen.clone();
+    let my_gen = gen.load(Ordering::SeqCst);
+    std::thread::spawn(move || {
+        while remaining > 0 {
+            std::thread::sleep(Duration::from_secs(1));
+            remaining -= 1;
+            // 期间用户开始了新录音/新指令 → 放弃执行
+            if gen.load(Ordering::SeqCst) != my_gen {
+                return;
+            }
+            staging.command_tick(remaining);
+        }
+        match injector.simulate_combo(&combo) {
+            Ok(()) => {
+                staging.committed();
+                // 短暂停留让用户看到"已执行"反馈，再清除指令展示并隐藏
+                std::thread::sleep(Duration::from_millis(600));
+                if gen.load(Ordering::SeqCst) == my_gen {
+                    staging.clear_command();
+                    staging.hide();
+                }
+            }
+            Err(e) => {
+                staging.clear_command();
+                staging.error(&format!("按键模拟失败：{e:#}"));
             }
         }
     });

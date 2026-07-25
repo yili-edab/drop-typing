@@ -14,6 +14,7 @@
 pub mod asr;
 pub mod audio;
 pub mod caret;
+pub mod command;
 pub mod config;
 pub mod hotkey;
 pub mod inject;

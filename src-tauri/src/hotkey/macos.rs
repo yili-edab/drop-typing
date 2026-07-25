@@ -33,6 +33,8 @@ impl HotkeySource for RdevHotkey {
                         EventType::KeyRelease(Key::MetaRight) => Some(HotkeyEvent::TriggerUp),
                         EventType::KeyPress(Key::AltGr) => Some(HotkeyEvent::RepairDown),
                         EventType::KeyRelease(Key::AltGr) => Some(HotkeyEvent::RepairUp),
+                        EventType::KeyPress(Key::ShiftRight) => Some(HotkeyEvent::CommandDown),
+                        EventType::KeyRelease(Key::ShiftRight) => Some(HotkeyEvent::CommandUp),
                         // 录音期间其它键按下 → 视为组合键用法，作废本次录音
                         EventType::KeyPress(_) => Some(HotkeyEvent::OtherKeyDown),
                         _ => None,
