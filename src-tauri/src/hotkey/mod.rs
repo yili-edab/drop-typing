@@ -19,11 +19,15 @@ use anyhow::Result;
 /// 热键事件。时长判定（短按/长按）放在 pipeline 做，本层只报原始按下/松开。
 #[derive(Debug, Clone)]
 pub enum HotkeyEvent {
-    /// 右 ⌘ 按下
+    /// 右 ⌘ 按下（输入/提交通道）
     TriggerDown,
     /// 右 ⌘ 松开
     TriggerUp,
-    /// 录音期间有其它键按下（说明右 ⌘ 被当作组合键修饰键使用，应当作废本次录音）
+    /// 右 ⌥ 按下（修正通道）
+    RepairDown,
+    /// 右 ⌥ 松开
+    RepairUp,
+    /// 录音期间有其它键按下（说明右修饰键被当作组合键修饰键使用，应当作废本次录音）
     OtherKeyDown,
     /// 监听器运行时错误（如权限被收回）
     Error(String),

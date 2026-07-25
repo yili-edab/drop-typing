@@ -21,13 +21,31 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # model = "qwen3-asr-flash"
 # api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# LLM（文本清洗，M2 使用）—— 百炼 Anthropic 兼容端点
+# LLM（文本清洗，M2）—— 不配置本节或缺 api_key 时关闭清洗，ASR 直出
+#
+# 方案一：百炼 Anthropic 兼容端点
 # [llm]
 # provider = "bailian"
 # protocol = "anthropic-messages" # Anthropic Messages API 兼容协议
 # base_url = "https://your-workspace.cn-beijing.maas.aliyuncs.com/apps/anthropic"
+# model = "claude-sonnet-4-5"     # 按工作区可用模型填写
 # api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#
+# 方案二：OpenAI 兼容协议（DeepSeek 默认，protocol 缺省即 openai-chat）
+# [llm]
+# provider = "deepseek"
+# protocol = "openai-chat"        # base_url / model 缺省为 DeepSeek 官方端点
+# api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#
+# 优化强度档位（缺省 standard）：
+#   conservative = 只加标点，不改语序措辞
+#   standard     = 去口水词 + 标点 + 中英空格 + 适度结构化
+# strength = "standard"
 
-# 长按判定阈值（毫秒，默认 250）：按下右 ⌘ 达到该时长视为长按（录音），
+# 长按判定阈值（毫秒，默认 150）：按下右 ⌘ 达到该时长视为长按（录音），
 # 松开时不足该时长视为短按（提交暂存条）。
-# long_press_threshold_ms = 250
+# long_press_threshold_ms = 150
+
+# 双击窗口（毫秒，默认 350）：第一次短按松手后，在该时长内再次短按松手
+# 视为双击（清空暂存条）；超时未等到第二击则确认为单击（提交暂存条）。
+# double_press_window_ms = 350

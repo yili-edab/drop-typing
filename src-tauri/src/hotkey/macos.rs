@@ -31,6 +31,8 @@ impl HotkeySource for RdevHotkey {
                     let ev = match event.event_type {
                         EventType::KeyPress(Key::MetaRight) => Some(HotkeyEvent::TriggerDown),
                         EventType::KeyRelease(Key::MetaRight) => Some(HotkeyEvent::TriggerUp),
+                        EventType::KeyPress(Key::AltGr) => Some(HotkeyEvent::RepairDown),
+                        EventType::KeyRelease(Key::AltGr) => Some(HotkeyEvent::RepairUp),
                         // 录音期间其它键按下 → 视为组合键用法，作废本次录音
                         EventType::KeyPress(_) => Some(HotkeyEvent::OtherKeyDown),
                         _ => None,

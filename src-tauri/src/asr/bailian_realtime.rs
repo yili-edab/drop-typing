@@ -27,7 +27,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::{RealtimeAsrProvider, RealtimeSession, FINISH_TIMEOUT};
 
 const DEFAULT_WS_URL: &str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference";
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub struct BailianRealtimeAsr {
     api_key: String,

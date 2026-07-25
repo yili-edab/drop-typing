@@ -951,6 +951,8 @@ dependencies = [
  "arboard",
  "async-trait",
  "base64 0.22.1",
+ "core-foundation 0.9.4",
+ "core-graphics 0.21.0",
  "cpal",
  "dirs 5.0.1",
  "enigo",

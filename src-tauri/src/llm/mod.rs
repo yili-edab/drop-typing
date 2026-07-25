@@ -1,0 +1,147 @@
+//! LLM 清洗层抽象（M2）。
+//!
+//! 与 `asr/` 同构：一套 trait + 每种协议一个适配器，`[llm].protocol` 决定适配器：
+//! - `openai-chat`（默认）：OpenAI Chat Completions 兼容协议（PRD 6.4 统一约定，
+//!   一套实现兼容 DeepSeek / OpenAI / Qwen / Ollama）
+//! - `anthropic-messages`：Anthropic Messages API 兼容协议（如百炼 /apps/anthropic 端点）
+//!
+//! 未配置 `[llm]` 或缺 api_key 时 `cleaner_from_config` 返回 None，清洗层关闭，
+//! ASR 直出（PRD 第 10 节"成本控制"要求的关闭清洗选项）。
+
+pub mod anthropic;
+pub mod openai;
+
+use std::sync::Arc;
+
+use anyhow::Result;
+use async_trait::async_trait;
+
+use crate::config::Config;
+
+/// 优化强度档位（PRD 4.1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strength {
+    /// 保守：只加标点，不改语序措辞
+    Conservative,
+    /// 标准（默认）：去口水词 + 标点 + 中英空格 + 适度结构化
+    Standard,
+}
+
+impl Strength {
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "conservative" => Strength::Conservative,
+            // 未知值回退默认档
+            _ => Strength::Standard,
+        }
+    }
+}
+
+/// 语音修正专用 system prompt。输入原文 + 修正说明，输出修正后全文。
+fn repair_system_prompt() -> &'static str {
+    "你是语音转写文本的修正助手。你会收到两部分：\
+     【原文】是暂存条中已有的文本，【修正说明】是用户对原文的修改指令。\
+     根据修正说明修改原文，只输出修正后的全文。\
+     不要输出任何解释、引号或前后缀，不要输出修正说明本身。"
+}
+
+/// 清洗档位对应的 system prompt。共同约束：只输出清洗后正文。
+fn system_prompt(strength: Strength) -> &'static str {
+    match strength {
+        Strength::Conservative => {
+            "你是语音转写文本的标点修正器。只做一件事：为文本添加/修正正确的标点符号\
+             （逗号、句号、问号等）。绝对不要改动任何措辞、语序，不要增删任何字词，\
+             包括口语填充词也原样保留。只输出修正后的正文，不要输出任何解释、引号或前后缀。"
+        }
+        Strength::Standard => {
+            "你是语音转写文本的清洗器。按以下规则清洗口语文本：\n\
+             1. 修正标点（逗号、句号、问号等）；\n\
+             2. 去除口水话与填充词（如“嗯”“那个”“就是说”“我觉得吧”等）；\n\
+             3. 中文与英文/数字之间加空格（pangu 风格）；\n\
+             4. 适度的口语结构化：明显的“第一…第二…”等枚举表达可整理为列表，\
+             但不要过度改写，保持原意与措辞。\n\
+             只输出清洗后的正文，不要输出任何解释、引号或前后缀。"
+        }
+    }
+}
+
+/// 文本清洗接口。
+#[async_trait]
+pub trait TextCleaner: Send + Sync {
+    /// 口语清洗（输入通道）：去掉口水话、修正标点、中英空格。
+    async fn clean(&self, text: &str, strength: Strength) -> Result<String>;
+
+    /// 语音修正（修正通道）：根据修正说明修改原文，输出修正后全文。
+    /// `original` 是暂存条当前全文，`instruction` 是用户说出的修正指令（ASR 转写结果）。
+    async fn repair(&self, original: &str, instruction: &str) -> Result<String>;
+}
+
+/// 根据配置构造清洗器。未配置 `[llm]`、缺 api_key 或协议未知时返回 None。
+///
+/// dispatch 只看 `protocol`（适配器选择）；`provider` 是厂商名，不参与分发。
+pub fn cleaner_from_config(cfg: &Config) -> Option<Arc<dyn TextCleaner>> {
+    let key = cfg.llm_api_key()?;
+    let model = cfg.llm.model.clone();
+    match cfg.llm_protocol().as_str() {
+        "openai-chat" => Some(Arc::new(openai::OpenAiCleaner::new(
+            key,
+            model,
+            cfg.llm.base_url.as_deref(),
+        ))),
+        "anthropic-messages" => match anthropic::AnthropicCleaner::new(
+            key,
+            model,
+            cfg.llm.base_url.as_deref(),
+        ) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(e) => {
+                eprintln!("[drop-typing] llm init failed: {e}");
+                None
+            }
+        },
+        other => {
+            eprintln!("[drop-typing] unknown llm protocol: {other}");
+            None
+        }
+    }
+}
+
+/// 清洗结果后处理。中英混排空格的本地兜底只在标准档应用——保守档约定
+/// "只加标点，不改语序措辞"，不做额外改写。
+pub(crate) fn post_process(text: &str, strength: Strength) -> String {
+    match strength {
+        Strength::Standard => pangu_spacing(text),
+        Strength::Conservative => text.to_string(),
+    }
+}
+
+/// 中英混排空格兜底（pangu 风格）：CJK 字符与 ASCII 字母/数字相邻时插入空格。
+/// LLM 为主、本函数做正则后处理兜底（PRD 4.1）。
+pub(crate) fn pangu_spacing(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 8);
+    for (i, &c) in chars.iter().enumerate() {
+        if i > 0 {
+            let prev = chars[i - 1];
+            if (is_cjk(prev) && is_ascii_alnum(c)) || (is_ascii_alnum(prev) && is_cjk(c)) {
+                out.push(' ');
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{4e00}'..='\u{9fff}'   // CJK 统一表意文字
+        | '\u{3400}'..='\u{4dbf}' // 扩展 A
+        | '\u{f900}'..='\u{faff}' // 兼容表意文字
+        | '\u{3000}'..='\u{303f}' // CJK 标点
+        | '\u{ff00}'..='\u{ffef}' // 全角字符
+    )
+}
+
+fn is_ascii_alnum(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+}

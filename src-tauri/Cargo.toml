@@ -34,6 +34,8 @@ hound = "3.5"
 rdev = "0.5"
 enigo = "0.2"
 arboard = "3"
+core-foundation = "0.9"
+core-graphics = "0.21"
 
 # drop-typing: vendor rdev 0.5.3 补丁 —— 移除 CGEventTap 后台线程中对 TIS/TSM
 # 输入法 API 的调用（macOS 26 主线程断言导致 EXC_BREAKPOINT）。详见

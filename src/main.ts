@@ -1,19 +1,25 @@
 import { listen, emit } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const bar = document.getElementById("bar") as HTMLDivElement;
 const finalEl = document.getElementById("final") as HTMLSpanElement;
 const partEl = document.getElementById("part") as HTMLSpanElement;
+const statusEl = document.getElementById("status") as HTMLDivElement;
+const repairNoteEl = document.getElementById("repair-note") as HTMLDivElement;
 
 const PLACEHOLDER = "按住右 ⌘ 说话，短按提交";
+const BAR_MAX_HEIGHT = 260;
 
 let currentText = "";
 let partialText = "";
 let committedTimer: number | undefined;
 
 function resize() {
-  // 多行自适应：测量内容高度后通知 Rust 侧调整窗口高度
   requestAnimationFrame(() => {
-    emit("drop-typing://resize", { height: bar.scrollHeight + 12 });
+    requestAnimationFrame(() => {
+      const h = Math.min(bar.scrollHeight, BAR_MAX_HEIGHT) + 12;
+      emit("drop-typing://resize", { height: h });
+    });
   });
 }
 
@@ -31,32 +37,57 @@ function renderText() {
   resize();
 }
 
-// 暂存条文本更新（追加/清空）—— 定稿内容，同时清掉中间结果
+// ---- 关闭按钮 ----
+
+document.getElementById("close-btn")!.addEventListener("click", () => {
+  bar.classList.remove("busy", "recording");
+  emit("drop-typing://close");
+  getCurrentWindow().hide();
+});
+
+// ---- Rust → 前端事件 ----
+
+// 暂存条文本更新（追加/清空）
 listen<{ text: string }>("drop-typing://staging", (e) => {
   currentText = e.payload.text;
   partialText = "";
   renderText();
 });
 
-// 实时识别的中间结果（句内累积，弱化样式）
+// 实时识别的中间结果（句内累积）
 listen<{ text: string }>("drop-typing://partial", (e) => {
   partialText = e.payload.text;
   bar.classList.remove("error");
   renderText();
 });
 
-// 录音状态（驱动波形动画）
+// 录音状态
 listen<{ recording: boolean }>("drop-typing://recording", (e) => {
   bar.classList.toggle("recording", e.payload.recording);
+});
+
+// 处理中状态（驱动麦克风光晕）
+listen<{ busy: boolean }>("drop-typing://busy", (e) => {
+  bar.classList.toggle("busy", e.payload.busy);
   resize();
 });
 
-// 转写中状态（呼吸效果）
-listen<{ busy: boolean }>("drop-typing://busy", (e) => {
-  bar.classList.toggle("busy", e.payload.busy);
+// 状态徽章（倾听中 / 识别中 / 润色中 / 修复中）
+listen<{ status: string }>("drop-typing://status", (e) => {
+  statusEl.textContent = e.payload.status;
+  statusEl.classList.toggle("visible", e.payload.status.length > 0);
+  resize();
 });
 
-// 异常态：黄底红字
+// 修复意见展示（M2 修正通道，独立于正文的特殊区块）
+listen<{ text: string }>("drop-typing://repair-note", (e) => {
+  const text = e.payload.text;
+  repairNoteEl.textContent = text ? `修复意见：${text}` : "";
+  repairNoteEl.classList.toggle("visible", text.length > 0);
+  resize();
+});
+
+// 异常态
 listen<{ message: string }>("drop-typing://error", (e) => {
   bar.classList.remove("placeholder", "busy", "recording");
   bar.classList.add("error");
@@ -65,7 +96,7 @@ listen<{ message: string }>("drop-typing://error", (e) => {
   resize();
 });
 
-// 提交成功反馈（绿色闪烁）
+// 提交成功反馈
 listen("drop-typing://committed", () => {
   window.clearTimeout(committedTimer);
   bar.classList.add("committed");
@@ -75,5 +106,8 @@ listen("drop-typing://committed", () => {
 });
 
 renderText();
-// 通知 Rust 侧前端已就绪，重发启动期间可能错过的状态（如配置/权限错误）
+// 锁定最小宽度：占位文字宽度作为下限，后续文字再少也不会缩窄
+requestAnimationFrame(() => {
+  bar.style.minWidth = `${bar.getBoundingClientRect().width}px`;
+});
 emit("drop-typing://ready");

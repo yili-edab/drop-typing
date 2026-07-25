@@ -21,7 +21,11 @@ fn default_http_model() -> String {
 }
 
 fn default_threshold() -> u64 {
-    250
+    150
+}
+
+fn default_double_press_window() -> u64 {
+    350
 }
 
 /// ASR 配置。
@@ -59,10 +63,10 @@ impl Default for AsrConfig {
     }
 }
 
-/// LLM 配置（M2 清洗层预留，M1/M1.5 仅解析不使用）。
+/// LLM 配置（M2 清洗层）。
 ///
 /// 与 ASR 同样约定：`provider` 是厂商名，`protocol` 决定适配器
-/// （如 `anthropic-messages` / `openai-chat`）。
+/// （`openai-chat` 默认 / `anthropic-messages`）。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct LlmConfig {
     #[serde(default)]
@@ -75,6 +79,9 @@ pub struct LlmConfig {
     pub base_url: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+    /// 优化强度档位（`conservative` / `standard`，默认 standard）
+    #[serde(default)]
+    pub strength: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +99,9 @@ pub struct Config {
     /// 长按判定阈值（毫秒）
     #[serde(default = "default_threshold")]
     pub long_press_threshold_ms: u64,
+    /// 双击清空暂存条窗口（毫秒），默认 150ms
+    #[serde(default = "default_double_press_window")]
+    pub double_press_window_ms: u64,
 }
 
 impl Default for Config {
@@ -102,6 +112,7 @@ impl Default for Config {
             dashscope_api_key: None,
             asr_model: None,
             long_press_threshold_ms: default_threshold(),
+            double_press_window_ms: default_double_press_window(),
         }
     }
 }
@@ -148,6 +159,29 @@ impl Config {
             "dashscope-http" => default_http_model(),
             _ => default_realtime_model(),
         }
+    }
+
+    /// LLM API Key（仅配置文件；未配置即关闭清洗层，ASR 直出）
+    pub fn llm_api_key(&self) -> Option<String> {
+        self.llm.api_key.clone().filter(|k| !k.trim().is_empty())
+    }
+
+    /// LLM 协议（适配器选择依据）。缺省为 PRD 6.4 约定的 OpenAI 兼容协议。
+    pub fn llm_protocol(&self) -> String {
+        self.llm
+            .protocol
+            .clone()
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or_else(|| "openai-chat".to_string())
+    }
+
+    /// 优化强度档位（默认 standard）
+    pub fn llm_strength(&self) -> String {
+        self.llm
+            .strength
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "standard".to_string())
     }
 
     /// 宽松加载：永远返回一份可用配置 + 可选的告警信息。

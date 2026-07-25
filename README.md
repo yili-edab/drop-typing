@@ -1,8 +1,19 @@
 # drop-typing
 
-> 按住说话、松手出字的语音输入工具（macOS）。当前进度：**M1**。
+> 按住说话、松手出字的语音输入工具（macOS）。当前进度：**M2**。
 >
 > 开源协议 MIT。产品细节见 [PRD.md](PRD.md)。
+
+## M2 已实现
+
+- LLM 清洗层（`llm/` 模块，与 `asr/` 同构的 trait + 协议适配器）：
+  - `openai-chat`（默认协议）：OpenAI Chat Completions 兼容，一套实现兼容 DeepSeek / OpenAI / Qwen / Ollama
+  - `anthropic-messages`：Anthropic Messages API 兼容（如百炼 `/apps/anthropic` 端点）
+- 清洗规则（PRD 4.1）：标点修正、去口水话、中英混排空格（LLM 为主 + 本地 pangu 兜底后处理）、口语结构化
+- 优化强度档位：`[llm].strength = "conservative"`（只加标点）/ `"standard"`（默认，全规则）
+- 清洗失败降级为原文追加 + 黄底红字提示，不丢内容；未配置 `[llm]` 或缺 api_key 时清洗层关闭、ASR 直出
+- 暂存条按需显示：默认隐藏，按下右 ⌘ 开始录音时才出现；**有光标则可视条左上角紧贴光标底边**（macOS Accessibility API 取插入点位置），取不到光标时依次回退到聚焦元素下方 → 聚焦窗口内底部居中 → 屏幕底部居中；短按提交后立即隐藏；错误（黄底红字）常显不自动隐藏
+- 右侧状态徽章：倾听中 → 识别中 → 润色中；润色期间先以未定稿样式显示未润色原文，完成后替换为润色结果
 
 ## M1 已实现
 
@@ -60,6 +71,27 @@ api_key = "sk-xxx"
 
 API Key 仅存本地，绝不上传到除百炼接口以外的任何地方。
 
+### LLM 清洗（可选）
+
+配置 `[llm]` 段即开启清洗；不配置或缺 `api_key` 则 ASR 直出（关闭清洗）：
+
+```toml
+[llm]
+provider = "deepseek"
+protocol = "openai-chat"          # 缺省即 openai-chat；备选 "anthropic-messages"
+api_key = "sk-xxx"
+# strength = "standard"           # conservative（只加标点）/ standard（默认，全规则）
+```
+
+- `openai-chat`：`base_url` / `model` 缺省为 DeepSeek 官方端点（`https://api.deepseek.com` / `deepseek-chat`），换成 OpenAI / Qwen / Ollama 时显式填写即可
+- `anthropic-messages`：需显式配置 `base_url` 与 `model`（百炼 Anthropic 兼容端点示例见 `config.example.toml`）
+
+手动测试清洗（不启动 App）：
+
+```bash
+cargo run --example test_llm -- "嗯 那个 我觉得吧 这个功能 第一 要快 第二 要稳"
+```
+
 ## 权限说明（macOS）
 
 | 权限 | 用途 | 说明 |
@@ -88,13 +120,18 @@ drop-typing/
 ├── src-tauri/
 │   ├── src/
 │   │   ├── lib.rs               # 窗口创建（无边框/置顶/全工作区/忽略鼠标）+ 启动
-│   │   ├── pipeline.rs          # 编排：热键 → 录音 → ASR → 暂存条 → 提交
-│   │   ├── staging.rs           # 暂存条状态（文本归属 Rust 侧）
+│   │   ├── pipeline.rs          # 编排：热键 → 录音 → ASR → 清洗 → 暂存条 → 提交
+│   │   ├── staging.rs           # 暂存条状态 + 窗口显隐/锚点定位（文本归属 Rust 侧）
+│   │   ├── caret.rs             # 光标屏幕位置查询（macOS AX API，贴光标显示）
 │   │   ├── config.rs            # 配置加载（[asr]/[llm] 段 + legacy/env 回退）
 │   │   ├── asr/                 # ASR 抽象：批量/实时两套 trait + 每家一个适配器
 │   │   │   ├── mod.rs
 │   │   │   ├── bailian.rs       #   百炼 qwen3-asr-flash（HTTP，备选）
 │   │   │   └── bailian_realtime.rs # 百炼 fun-asr-realtime（WebSocket 流式，默认）
+│   │   ├── llm/                 # LLM 清洗抽象：trait + 每种协议一个适配器
+│   │   │   ├── mod.rs           #   trait/档位/prompt/pangu 兜底 + dispatch
+│   │   │   ├── openai.rs        #   OpenAI 兼容协议（默认，DeepSeek 缺省端点）
+│   │   │   └── anthropic.rs     #   Anthropic Messages 兼容协议
 │   │   ├── audio/recorder.rs    # cpal 录音 → 流式 PCM chunk / 整段 WAV
 │   │   ├── hotkey/              # 热键抽象：trait HotkeySource（平台相关）
 │   │   │   ├── mod.rs
@@ -103,6 +140,7 @@ drop-typing/
 │   │       ├── mod.rs
 │   │       └── macos.rs         #   arboard 剪贴板 + enigo 模拟 Cmd+V
 │   ├── examples/test_asr.rs     # ASR 独立手动测试入口
+│   ├── examples/test_llm.rs     # LLM 清洗独立手动测试入口
 │   └── tauri.conf.json / capabilities/ / Info.plist
 ├── config.example.toml
 └── PRD.md
@@ -114,21 +152,24 @@ drop-typing/
 
 **选用 rdev，不用 tauri-plugin-global-shortcut。** 原因：M1 需要"裸右 ⌘ 单独按下 + 精确 press/release 事件 + 松开时时长判定"，global-shortcut 插件面向组合键按下即触发，拿不到单独的松开事件，也不支持裸修饰键语义。rdev 的 `listen`（CGEventTap）能精确给出 `MetaRight` 的按下/松开，代价是需要辅助功能权限（模拟 Cmd+V 本来也需要，无额外成本）。
 
-## M1 已知限制（后续里程碑处理）
+## 已知限制（后续里程碑处理）
 
 - 暂存条只读：手动编辑是 M3（当前窗口忽略鼠标事件以保证绝不抢焦点，M3 需换 non-activating NSPanel 方案）
 - 剪贴板只按纯文本保存/恢复：若提交前剪贴板里是图片/文件等非文本内容，恢复时会丢失
 - 重采样为线性插值，后续可换 rubato
-- ASR 上下文偏置（热词/暂存条文本随请求传入）接口已预留，M2 接入
+- 光标定位依赖目标 App 的 Accessibility 支持：已做 `AXEnhancedUserInterface` 唤醒（Electron 应用需要），仍有少数 App 取不到插入点，此时依次回退到聚焦元素下方 → 聚焦窗口内底部居中 → 屏幕底部居中
+- ASR 上下文偏置（热词/暂存条文本随请求传入）接口已预留，尚未接入
 - 无设置界面（M4）、无权限引导流程（M4）
 
 ## 用户验证清单
 
-1. `npm install && npm run tauri dev` → 屏幕底部出现暂存条
-2. 授予终端辅助功能权限并重启 → 长按右 ⌘ 暂存条出现红色波形
-3. 配置好 Key 后长按说话 → 松开后 1-2 秒文本追加到暂存条
-4. 短按右 ⌘ → 文本粘贴到当前聚焦 App，暂存条清空并闪绿
-5. 拔掉 Key / 断网 → 暂存条黄底红字报错
+1. `npm install && npm run tauri dev` → 启动后**不显示**暂存条（配置/权限有问题时除外，会黄底红字常显）
+2. 授予终端辅助功能权限并重启 → 在文本框中长按右 ⌘，暂存条出现在光标旁，右侧显示"倾听中"+ 红色波形
+3. 松开 → 状态依次变为"识别中"→"润色中"，清洗后文本追加到暂存条，保持可见（短按提交后才消失）
+4. 在桌面 / Finder（无文本焦点）长按 → 暂存条回退到底部居中
+5. 配置 `[llm]` 后长按说带口水话的话（如"嗯那个第一要快第二要稳"）→ 进暂存条的是清洗后文本；切换 `strength = "conservative"` 只加标点
+6. 短按右 ⌘ → 文本粘贴到当前聚焦 App，暂存条清空并立即隐藏
+7. 拔掉 Key / 断网 → 暂存条黄底红字报错（LLM 清洗失败时降级为原文追加），常显不自动隐藏
 
 ## License
 
