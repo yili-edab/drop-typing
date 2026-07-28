@@ -8,6 +8,8 @@
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 use anyhow::Result;
 
@@ -24,4 +26,9 @@ pub trait Injector: Send + Sync {
 #[cfg(target_os = "macos")]
 pub fn default_injector(app: tauri::AppHandle) -> Box<dyn Injector> {
     Box::new(macos::MacosInjector::new(app))
+}
+
+#[cfg(target_os = "windows")]
+pub fn default_injector(app: tauri::AppHandle) -> Box<dyn Injector> {
+    Box::new(windows::WindowsInjector::new(app))
 }

@@ -28,12 +28,13 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 cpal = "0.15"
 hound = "3.5"
-
-# ---- 平台相关依赖（macOS）。Windows 移植时在此添加对应 cfg 分支。 ----
-[target.'cfg(target_os = "macos")'.dependencies]
+# 以下三个 crate 跨平台（macOS + Windows 均可用），放在通用依赖中
 rdev = "0.5"
 enigo = "0.2"
 arboard = "3"
+
+# ---- macOS 专属依赖 ----
+[target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
 core-graphics = "0.21"
 

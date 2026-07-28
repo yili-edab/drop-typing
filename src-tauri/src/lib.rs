@@ -13,6 +13,7 @@
 
 pub mod asr;
 pub mod audio;
+#[cfg(target_os = "macos")]
 pub mod caret;
 pub mod command;
 pub mod config;

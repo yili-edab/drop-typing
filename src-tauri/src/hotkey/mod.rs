@@ -11,6 +11,8 @@
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 use std::sync::mpsc;
 
@@ -49,4 +51,9 @@ pub trait HotkeySource: Send {
 #[cfg(target_os = "macos")]
 pub fn default_source() -> Box<dyn HotkeySource> {
     Box::new(macos::RdevHotkey)
+}
+
+#[cfg(target_os = "windows")]
+pub fn default_source() -> Box<dyn HotkeySource> {
+    Box::new(windows::WindowsHotkey)
 }
