@@ -2,13 +2,16 @@
 //!
 //! 需要辅助功能（Accessibility）权限，否则 CGEventTap 创建失败、
 //! 回调永远收不到事件。用 AXIsProcessTrusted() 检测并在 UI 提示。
+//!
+//! 所有快捷键均可在 `~/.drop-typing.toml` 的 `[hotkey]` 段中自定义。
+//! macOS 端每个通道为一个单键（非组合）。
 
 use std::sync::mpsc;
 
 use anyhow::Result;
 use rdev::{EventType, Key};
 
-use super::{HotkeyEvent, HotkeySource};
+use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -23,24 +26,44 @@ pub fn accessibility_trusted() -> bool {
 pub struct RdevHotkey;
 
 impl HotkeySource for RdevHotkey {
-    fn start(self: Box<Self>, tx: mpsc::Sender<HotkeyEvent>) -> Result<()> {
+    fn start(
+        self: Box<Self>,
+        tx: mpsc::Sender<HotkeyEvent>,
+        bindings: Bindings,
+    ) -> Result<()> {
         std::thread::Builder::new()
             .name("drop-typing-hotkey".into())
             .spawn(move || {
                 let result = rdev::listen(move |event| {
                     let ev = match event.event_type {
-                        EventType::KeyPress(Key::MetaRight) => Some(HotkeyEvent::TriggerDown),
-                        EventType::KeyRelease(Key::MetaRight) => Some(HotkeyEvent::TriggerUp),
-                        EventType::KeyPress(Key::AltGr) => Some(HotkeyEvent::RepairDown),
-                        EventType::KeyRelease(Key::AltGr) => Some(HotkeyEvent::RepairUp),
-                        EventType::KeyPress(Key::ShiftRight) => Some(HotkeyEvent::CommandDown),
-                        EventType::KeyRelease(Key::ShiftRight) => Some(HotkeyEvent::CommandUp),
-                        // 录音期间其它键按下 → 视为组合键用法，作废本次录音
-                        EventType::KeyPress(_) => Some(HotkeyEvent::OtherKeyDown),
+                        EventType::KeyPress(ref key) => {
+                            if matches_any(key, &bindings.trigger) {
+                                Some(HotkeyEvent::TriggerDown)
+                            } else if matches_any(key, &bindings.repair) {
+                                Some(HotkeyEvent::RepairDown)
+                            } else if matches_any(key, &bindings.command) {
+                                Some(HotkeyEvent::CommandDown)
+                            } else if matches_any(key, &bindings.cancel) {
+                                Some(HotkeyEvent::CancelDown)
+                            } else {
+                                // 录音期间其它键按下 → 视为组合键用法，作废本次录音
+                                Some(HotkeyEvent::OtherKeyDown)
+                            }
+                        }
+                        EventType::KeyRelease(ref key) => {
+                            if matches_any(key, &bindings.trigger) {
+                                Some(HotkeyEvent::TriggerUp)
+                            } else if matches_any(key, &bindings.repair) {
+                                Some(HotkeyEvent::RepairUp)
+                            } else if matches_any(key, &bindings.command) {
+                                Some(HotkeyEvent::CommandUp)
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     };
                     if let Some(ev) = ev {
-                        // 接收端退出后发送失败属正常，忽略
                         let _ = tx.send(ev);
                     }
                 });
@@ -54,4 +77,9 @@ impl HotkeySource for RdevHotkey {
     fn permission_trusted(&self) -> bool {
         accessibility_trusted()
     }
+}
+
+/// 检查某个键是否匹配任意一个规格
+fn matches_any(key: &Key, specs: &[KeySpec]) -> bool {
+    specs.iter().any(|s| s.matches(key))
 }

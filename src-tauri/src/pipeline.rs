@@ -96,8 +96,9 @@ pub fn start(app: AppHandle) {
 
     let (tx, rx) = mpsc::channel::<HotkeyEvent>();
     let staging_for_listener = staging.clone();
+    let hotkey_bindings = cfg.hotkey_bindings();
     std::thread::spawn(move || {
-        if let Err(e) = source.start(tx) {
+        if let Err(e) = source.start(tx, hotkey_bindings) {
             staging_for_listener.error(&format!("全局热键监听启动失败：{e}"));
         }
     });

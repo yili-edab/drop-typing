@@ -1,14 +1,13 @@
 //! Windows 全局热键：rdev 低级键盘钩子（WH_KEYBOARD_LL）。
 //!
 //! 多键组合方案（与 macOS 单键方案不同）：
-//! - Ctrl+Win  → 输入/提交通道（长按录音，短按提交）
-//! - Win+Alt   → 语音控制通道（长按说出指令）
-//! - Win+Shift → 语音修复通道（长按说出修正）
-//! - Esc        → 清空暂存条并隐藏
+//! - 默认 Ctrl+Win  → 输入/提交通道（长按录音，短按提交）
+//! - 默认 Win+Alt   → 修正/控制通道
+//! - 默认 Win+Shift → 指令/修复通道
+//! - 默认 Esc       → 清空暂存条
 //!
-//! 实现原理：rdev listen 回调每次只报告单个按键的 press/release，
-//! 本模块自行追踪 Ctrl/Win/Alt/Shift 四个修饰键的按下状态，
-//! 在状态变化时合成语义 HotkeyEvent（TriggerDown/Up 等）。
+//! 所有快捷键均可在 `~/.drop-typing.toml` 的 `[hotkey]` 段中自定义。
+//! 每个绑定由一组按键规格组成，所有键必须同时按下才触发。
 //!
 //! Windows 低级键盘钩子无需辅助功能权限，但部分杀毒软件可能将全局键盘监听标记为可疑行为。
 
@@ -17,79 +16,81 @@ use std::sync::mpsc;
 use anyhow::Result;
 use rdev::{EventType, Key};
 
-use super::{HotkeyEvent, HotkeySource};
+use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, ModFamily};
 
-// ── 组合检测状态机 ──────────────────────────────────────────────
+// ── 内部组合定义（由 Bindings 转换而来）───────────────────────────
 
-/// 修饰键槽位（左右合并）
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ModSlot {
-    Ctrl,
-    Win,
-    Alt,
-    Shift,
+/// 经配置解析后的组合通道定义
+struct ComboDef {
+    /// 激活时发送哪个 Down/Up 事件
+    down: HotkeyEvent,
+    up: HotkeyEvent,
+    /// 需要哪些修饰键家族同时按下
+    ctrl: bool,
+    win: bool,
+    alt: bool,
+    shift: bool,
 }
 
-/// 当前激活的组合
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ActiveCombo {
-    Trigger, // Ctrl+Win
-    Repair,  // Win+Alt
-    Command, // Win+Shift
-}
-
-/// 将 rdev Key 映射到修饰键槽位（非修饰键返回 None）
-fn mod_slot(key: &Key) -> Option<ModSlot> {
-    match key {
-        Key::ControlLeft | Key::ControlRight => Some(ModSlot::Ctrl),
-        Key::MetaLeft | Key::MetaRight => Some(ModSlot::Win),
-        Key::Alt | Key::AltGr => Some(ModSlot::Alt),
-        Key::ShiftLeft | Key::ShiftRight => Some(ModSlot::Shift),
-        _ => None,
+/// 从用户配置的 KeySpec 列表推导每个通道所需的修饰键家族。
+///
+/// Windows 组合由修饰键家族（Control/Meta/Alt/Shift）构成；
+/// 精确键（如 KeyA）在组合中不适用，会被忽略并打印警告。
+fn combo_from_specs(
+    specs: &[KeySpec],
+    down: HotkeyEvent,
+    up: HotkeyEvent,
+) -> ComboDef {
+    let (mut ctrl, mut win, mut alt, mut shift) = (false, false, false, false);
+    for s in specs {
+        match s {
+            KeySpec::Family(ModFamily::Control) => ctrl = true,
+            KeySpec::Family(ModFamily::Meta) => win = true,
+            KeySpec::Family(ModFamily::Alt) => alt = true,
+            KeySpec::Family(ModFamily::Shift) => shift = true,
+            KeySpec::Exact(key) => {
+                eprintln!(
+                    "[drop-typing] 警告：Windows 组合键不支持精确键 {key:?}，已忽略。\
+                     请使用 Control/Meta/Alt/Shift 家族名。"
+                );
+            }
+        }
     }
+    ComboDef { down, up, ctrl, win, alt, shift }
 }
 
-/// 给定槽位是否属于某个组合的成员
-fn is_member(slot: ModSlot, combo: ActiveCombo) -> bool {
+/// 检查修饰键状态是否满足某个组合定义
+fn combo_matches(def: &ComboDef, ctrl: bool, win: bool, alt: bool, shift: bool) -> bool {
+    // 空组合（所有家族都为 false）不应匹配任何状态
+    let has_req = def.ctrl || def.win || def.alt || def.shift;
+    has_req
+        && (!def.ctrl || ctrl)
+        && (!def.win || win)
+        && (!def.alt || alt)
+        && (!def.shift || shift)
+}
+
+/// 修饰键家族是否已被某个组合占用（在组合激活期间，按下"不属于"该组的修饰键应 taint）
+fn family_in_combo(f: ModFamily, def: &ComboDef) -> bool {
     matches!(
-        (slot, combo),
-        (ModSlot::Ctrl, ActiveCombo::Trigger)
-            | (ModSlot::Win, ActiveCombo::Trigger)
-            | (ModSlot::Win, ActiveCombo::Repair)
-            | (ModSlot::Alt, ActiveCombo::Repair)
-            | (ModSlot::Win, ActiveCombo::Command)
-            | (ModSlot::Shift, ActiveCombo::Command)
+        (f, def.ctrl, def.win, def.alt, def.shift),
+        (ModFamily::Control, true, _, _, _)
+            | (ModFamily::Meta, _, true, _, _)
+            | (ModFamily::Alt, _, _, true, _)
+            | (ModFamily::Shift, _, _, _, true)
     )
 }
 
-/// 激活的组合 → Down 事件
-fn hotkey_down(combo: ActiveCombo) -> HotkeyEvent {
-    match combo {
-        ActiveCombo::Trigger => HotkeyEvent::TriggerDown,
-        ActiveCombo::Repair => HotkeyEvent::RepairDown,
-        ActiveCombo::Command => HotkeyEvent::CommandDown,
-    }
-}
+// ── 修饰键工具函数 ────────────────────────────────────────────────
 
-/// 激活的组合 → Up 事件
-fn hotkey_up(combo: ActiveCombo) -> HotkeyEvent {
-    match combo {
-        ActiveCombo::Trigger => HotkeyEvent::TriggerUp,
-        ActiveCombo::Repair => HotkeyEvent::RepairUp,
-        ActiveCombo::Command => HotkeyEvent::CommandUp,
-    }
-}
-
-/// 尝试从当前修饰键状态中识别有效组合
-fn detect_combo(ctrl: bool, win: bool, alt: bool, shift: bool) -> Option<ActiveCombo> {
-    if ctrl && win {
-        Some(ActiveCombo::Trigger) // Ctrl+Win
-    } else if win && alt {
-        Some(ActiveCombo::Repair) // Win+Alt
-    } else if win && shift {
-        Some(ActiveCombo::Command) // Win+Shift
-    } else {
-        None
+/// 将 rdev Key 映射到修饰键家族（非修饰键返回 None）
+fn mod_family(key: &Key) -> Option<ModFamily> {
+    match key {
+        Key::ControlLeft | Key::ControlRight => Some(ModFamily::Control),
+        Key::MetaLeft | Key::MetaRight => Some(ModFamily::Meta),
+        Key::Alt | Key::AltGr => Some(ModFamily::Alt),
+        Key::ShiftLeft | Key::ShiftRight => Some(ModFamily::Shift),
+        _ => None,
     }
 }
 
@@ -98,47 +99,65 @@ fn detect_combo(ctrl: bool, win: bool, alt: bool, shift: bool) -> Option<ActiveC
 pub struct WindowsHotkey;
 
 impl HotkeySource for WindowsHotkey {
-    fn start(self: Box<Self>, tx: mpsc::Sender<HotkeyEvent>) -> Result<()> {
+    fn start(
+        self: Box<Self>,
+        tx: mpsc::Sender<HotkeyEvent>,
+        bindings: Bindings,
+    ) -> Result<()> {
+        // 将用户配置转换为内部组合定义
+        let combos = vec![
+            combo_from_specs(&bindings.trigger, HotkeyEvent::TriggerDown, HotkeyEvent::TriggerUp),
+            combo_from_specs(&bindings.repair, HotkeyEvent::RepairDown, HotkeyEvent::RepairUp),
+            combo_from_specs(&bindings.command, HotkeyEvent::CommandDown, HotkeyEvent::CommandUp),
+        ];
+
+        // 清空键规格（取消独立于组合，单键触发）
+        let cancel_specs = bindings.cancel.clone();
+
         std::thread::Builder::new()
             .name("drop-typing-hotkey".into())
             .spawn(move || {
-                // 修饰键状态（左右合并为同一槽位）
+                // 修饰键状态（左右合并为同一家族）
                 let (mut ctrl, mut win, mut alt, mut shift) =
                     (false, false, false, false);
-                let mut active: Option<ActiveCombo> = None;
+                // 当前激活的组合在 combos 中的索引
+                let mut active_idx: Option<usize> = None;
 
                 let result = rdev::listen(move |event| {
                     match event.event_type {
                         // ── 按键按下 ──
                         EventType::KeyPress(ref key) => {
-                            // Esc：无组合激活时 → 清空暂存条
-                            if *key == Key::Escape && active.is_none() {
+                            // 清空键：无组合激活时单按即清空
+                            if active_idx.is_none()
+                                && cancel_specs.iter().any(|s| s.matches(key))
+                            {
                                 let _ = tx.send(HotkeyEvent::CancelDown);
                                 return;
                             }
 
-                            if let Some(slot) = mod_slot(key) {
+                            if let Some(fam) = mod_family(key) {
                                 // 更新修饰键状态
-                                match slot {
-                                    ModSlot::Ctrl => ctrl = true,
-                                    ModSlot::Win => win = true,
-                                    ModSlot::Alt => alt = true,
-                                    ModSlot::Shift => shift = true,
+                                match fam {
+                                    ModFamily::Control => ctrl = true,
+                                    ModFamily::Meta => win = true,
+                                    ModFamily::Alt => alt = true,
+                                    ModFamily::Shift => shift = true,
                                 }
 
-                                if active.is_none() {
-                                    // 检查是否新形成有效组合
-                                    if let Some(combo) =
-                                        detect_combo(ctrl, win, alt, shift)
-                                    {
-                                        active = Some(combo);
-                                        let _ = tx.send(hotkey_down(combo));
+                                if active_idx.is_none() {
+                                    // 检查是否有新的组合形成
+                                    if let Some(idx) = combos.iter().position(|c| {
+                                        combo_matches(c, ctrl, win, alt, shift)
+                                    }) {
+                                        active_idx = Some(idx);
+                                        let _ = tx.send(combos[idx].down.clone());
                                     }
-                                } else if !is_member(slot, active.unwrap()) {
-                                    // 组合激活期间按下不属于该组合的修饰键 → taint
+                                } else if !family_in_combo(fam, &combos[active_idx.unwrap()])
+                                {
+                                    // 组合激活期间，按下不属于该组合的修饰键 → taint
                                     let _ = tx.send(HotkeyEvent::OtherKeyDown);
                                 }
-                            } else if active.is_some() {
+                            } else if active_idx.is_some() {
                                 // 非修饰键 + 组合激活中 → taint
                                 let _ = tx.send(HotkeyEvent::OtherKeyDown);
                             }
@@ -147,33 +166,33 @@ impl HotkeySource for WindowsHotkey {
 
                         // ── 按键释放 ──
                         EventType::KeyRelease(ref key) => {
-                            if let Some(slot) = mod_slot(key) {
-                                let was_active = active;
+                            if let Some(fam) = mod_family(key) {
+                                let was_active = active_idx;
 
                                 // 如果释放的键属于当前激活组合 → 结束该组合
-                                if let Some(combo) = active {
-                                    if is_member(slot, combo) {
-                                        let _ = tx.send(hotkey_up(combo));
-                                        active = None;
+                                if let Some(idx) = active_idx {
+                                    if family_in_combo(fam, &combos[idx]) {
+                                        let _ = tx.send(combos[idx].up.clone());
+                                        active_idx = None;
                                     }
                                 }
 
                                 // 更新修饰键状态
-                                match slot {
-                                    ModSlot::Ctrl => ctrl = false,
-                                    ModSlot::Win => win = false,
-                                    ModSlot::Alt => alt = false,
-                                    ModSlot::Shift => shift = false,
+                                match fam {
+                                    ModFamily::Control => ctrl = false,
+                                    ModFamily::Meta => win = false,
+                                    ModFamily::Alt => alt = false,
+                                    ModFamily::Shift => shift = false,
                                 }
 
                                 // 如果刚结束了一个组合，检查是否新形成了另一个组合
                                 // （「滑键」场景：保持 Win 不放，从 Ctrl 滑到 Alt）
-                                if was_active.is_some() && active.is_none() {
-                                    if let Some(new_combo) =
-                                        detect_combo(ctrl, win, alt, shift)
-                                    {
-                                        active = Some(new_combo);
-                                        let _ = tx.send(hotkey_down(new_combo));
+                                if was_active.is_some() && active_idx.is_none() {
+                                    if let Some(idx) = combos.iter().position(|c| {
+                                        combo_matches(c, ctrl, win, alt, shift)
+                                    }) {
+                                        active_idx = Some(idx);
+                                        let _ = tx.send(combos[idx].down.clone());
                                     }
                                 }
                             }

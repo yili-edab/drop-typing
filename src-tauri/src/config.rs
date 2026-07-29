@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use crate::command::Modifier;
+use crate::hotkey::{Bindings, KeySpec};
 
 fn default_asr_provider() -> String {
     "bailian".to_string()
@@ -166,6 +167,53 @@ pub struct LlmConfig {
     pub strength: Option<String>,
 }
 
+/// 快捷键原始配置（TOML 中的字符串列表）。
+///
+/// 每条通道的按键由一组 KeySpec 字符串定义，运行时解析为 `Bindings`。
+/// 未配置时使用平台默认值。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HotkeyRawConfig {
+    /// 输入/提交通道（长按录音，短按确认）
+    #[serde(default)]
+    pub trigger: Option<Vec<String>>,
+    /// 修正/控制通道
+    #[serde(default)]
+    pub repair: Option<Vec<String>>,
+    /// 指令/修复通道
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    /// 清空暂存条
+    #[serde(default)]
+    pub cancel: Option<Vec<String>>,
+}
+
+impl HotkeyRawConfig {
+    /// 将原始字符串列表解析为 `Bindings`。
+    ///
+    /// 未配置的通道回退为平台默认值；解析失败的按键名会以 Err 报告。
+    pub fn into_bindings(self) -> Result<Bindings, String> {
+        let defaults = Bindings::platform_default();
+        Ok(Bindings {
+            trigger: parse_or_default(self.trigger, &defaults.trigger)?,
+            repair: parse_or_default(self.repair, &defaults.repair)?,
+            command: parse_or_default(self.command, &defaults.command)?,
+            cancel: parse_or_default(self.cancel, &defaults.cancel)?,
+        })
+    }
+}
+
+fn parse_or_default(
+    raw: Option<Vec<String>>,
+    defaults: &[KeySpec],
+) -> Result<Vec<KeySpec>, String> {
+    match raw {
+        Some(keys) if !keys.is_empty() => {
+            keys.iter().map(|k| KeySpec::parse(k)).collect()
+        }
+        _ => Ok(defaults.to_vec()),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -175,6 +223,9 @@ pub struct Config {
     /// 语音指令（M4 指令通道）
     #[serde(default)]
     pub command: CommandConfig,
+    /// 快捷键配置（缺省使用平台默认值）
+    #[serde(default)]
+    pub hotkey: HotkeyRawConfig,
     /// 旧版（M1）顶层 Key，向后兼容
     #[serde(default)]
     pub dashscope_api_key: Option<String>,
@@ -203,6 +254,7 @@ impl Default for Config {
             double_press_window_ms: default_double_press_window(),
             command_countdown_ms: default_command_countdown(),
             command: CommandConfig::default(),
+            hotkey: HotkeyRawConfig::default(),
         }
     }
 }
@@ -277,6 +329,30 @@ impl Config {
     /// 指令通道有效倒计时（M4）：`[command].countdown_ms` 优先，否则顶层字段兜底
     pub fn effective_command_countdown_ms(&self) -> u64 {
         self.command.countdown_ms.unwrap_or(self.command_countdown_ms)
+    }
+
+    /// 解析快捷键绑定。
+    ///
+    /// 用户配置了 `[hotkey]` 段且解析成功时使用用户配置；
+    /// 解析失败时打印警告并回退为平台默认值。
+    pub fn hotkey_bindings(&self) -> Bindings {
+        let defaults = Bindings::platform_default();
+        if self.hotkey.trigger.is_none()
+            && self.hotkey.repair.is_none()
+            && self.hotkey.command.is_none()
+            && self.hotkey.cancel.is_none()
+        {
+            return defaults;
+        }
+        match self.hotkey.clone().into_bindings() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "[drop-typing] 快捷键配置解析失败：{e}。已回退为平台默认值。"
+                );
+                defaults
+            }
+        }
     }
 
     /// 宽松加载：永远返回一份可用配置 + 可选的告警信息。

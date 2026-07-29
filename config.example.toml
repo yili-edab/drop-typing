@@ -56,6 +56,52 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # command_countdown_ms = 2000
 
 # -----------------------------------------------------------
+# 快捷键自定义（可选，未配置时使用平台默认值）
+#
+# macOS 端每个通道为一个单键；Windows 端为由修饰键家族（Control/Meta/Alt/Shift）
+# 组成的多键组合——所有列出的键必须同时按住才触发。
+#
+# 键名（大小写不敏感）：
+#   家族名（匹配左右任意变体）    Control/Ctrl, Meta/Win/Cmd, Alt/Opt, Shift
+#   精确键（仅匹配该物理键）      ControlLeft/ControlRight, MetaLeft/MetaRight,
+#                               AltGr, ShiftLeft/ShiftRight, Escape/Esc,
+#                               Space, Tab, Return/Enter, Backspace, Delete,
+#                               KeyA..KeyZ, Num0..Num9, F1..F12,
+#                               Up/Down/Left/Right 等
+#
+# 注意：Windows 端三个功能通道（trigger/repair/command）仅支持修饰键家族名，
+# cancel 支持任意键名。
+# -----------------------------------------------------------
+
+# ── macOS 默认（单键）──
+# [hotkey]
+# trigger = ["MetaRight"]     # 右 ⌘：长按录音，短按确认
+# repair  = ["AltGr"]         # 右 ⌥：长按语音修复
+# command = ["ShiftRight"]    # 右 ⇧：长按语音指令
+# cancel  = ["Escape"]        # Esc：清空暂存条
+
+# ── Windows 默认（Win 组合键）──
+# [hotkey]
+# trigger = ["Control", "Meta"]   # Ctrl+Win：长按录音，短按确认
+# repair  = ["Meta", "Alt"]       # Win+Alt：长按语音控制
+# command = ["Meta", "Shift"]     # Win+Shift：长按语音修复
+# cancel  = ["Escape"]            # Esc：清空暂存条
+
+# ── 自定义示例：macOS 用左 ⌘ + Space 作为输入键 ──
+# [hotkey]
+# trigger = ["MetaLeft"]     # 仅左 ⌘（而非默认的右 ⌘）
+# repair  = ["AltGr"]
+# command = ["ShiftRight"]
+# cancel  = ["Escape"]
+
+# ── 自定义示例：Windows 仅用右侧修饰键组合 ──
+# [hotkey]
+# trigger = ["ControlRight", "MetaRight"]
+# repair  = ["MetaRight", "AltGr"]
+# command = ["MetaRight", "ShiftRight"]
+# cancel  = ["Escape"]
+
+# -----------------------------------------------------------
 # 语音指令词表自定义（M4 指令通道）
 #
 # 未配置任何段时使用内置词表。用户追加的条目优先匹配，内置兜底。
