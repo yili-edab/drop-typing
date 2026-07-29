@@ -11,8 +11,12 @@ use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition};
 
 /// 暂存条窗口宽度（逻辑像素）
 pub(crate) const WIN_WIDTH: f64 = 640.0;
-/// 底部居中时距屏幕底部的偏移（逻辑像素）
+/// 底部居中时距屏幕底部的偏移（逻辑像素）。
+/// macOS 预留 Dock 区域，Windows 预留任务栏 + 安全边距。
+#[cfg(target_os = "macos")]
 pub(crate) const BOTTOM_OFFSET: f64 = 110.0;
+#[cfg(target_os = "windows")]
+pub(crate) const BOTTOM_OFFSET: f64 = 80.0;
 /// 窗口高度夹取范围（一行约 60px，最多 ~92px / ~4 行）
 pub(crate) const MIN_HEIGHT: f64 = 60.0;
 pub(crate) const MAX_HEIGHT: f64 = 272.0;
@@ -59,11 +63,13 @@ impl Staging {
     fn apply_resize(&self, height: f64) {
         let Some(win) = self.window() else { return };
         let h = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
-        // 保持底边不动向上长：按窗口自身 scale 计算新旧物理高度差，移动顶边
+        // 保持底边不动向上长：按窗口自身 scale 计算新旧物理高度差，移动顶边。
+        // 防止内容增长时窗口顶边移出屏幕（Windows 任务栏 + DPI 可能使初位偏小）
         if let (Ok(size), Ok(pos)) = (win.outer_size(), win.outer_position()) {
             let scale = size.width as f64 / WIN_WIDTH;
             let dy = h * scale - size.height as f64;
-            let _ = win.set_position(PhysicalPosition::new(pos.x, pos.y - dy as i32));
+            let new_y = (pos.y as f64 - dy).max(0.0);
+            let _ = win.set_position(PhysicalPosition::new(pos.x, new_y as i32));
         }
         let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(WIN_WIDTH, h)));
     }

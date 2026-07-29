@@ -55,6 +55,29 @@ pub fn run() {
             // M3 加入手动编辑时需移除该行并改用 NSPanel 方案。
             let _ = window.set_ignore_cursor_events(true);
 
+            // Windows 平台创建系统托盘图标（macOS 通过 Dock 可见，无需托盘）
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                use tauri::tray::TrayIconBuilder;
+
+                let quit_item = MenuItemBuilder::with_id("quit", "退出 drop-typing")
+                    .build(app.handle())?;
+                let menu = MenuBuilder::new(app.handle())
+                    .item(&quit_item)
+                    .build()?;
+                let _tray = TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .menu(&menu)
+                    .tooltip("drop-typing — 按住空格说话，松开出字")
+                    .on_menu_event(|app, event| {
+                        if event.id() == "quit" {
+                            app.exit(0);
+                        }
+                    })
+                    .build(app.handle())?;
+            }
+
             pipeline::start(app.handle().clone());
             Ok(())
         })
