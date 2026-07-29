@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::{post_process, repair_system_prompt, system_prompt, Strength, TextCleaner};
+use super::{post_process, repair_system_prompt, TextCleaner};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
@@ -44,11 +44,11 @@ impl OpenAiCleaner {
 
 #[async_trait]
 impl TextCleaner for OpenAiCleaner {
-    async fn clean(&self, text: &str, strength: Strength) -> Result<String> {
+    async fn clean(&self, text: &str, system_prompt: &str) -> Result<String> {
         let body = json!({
             "model": self.model,
             "messages": [
-                { "role": "system", "content": system_prompt(strength) },
+                { "role": "system", "content": system_prompt },
                 { "role": "user", "content": text }
             ]
         });
@@ -77,7 +77,7 @@ impl TextCleaner for OpenAiCleaner {
         if text.is_empty() {
             return Err(anyhow!("LLM 返回空文本（原始响应：{v}）"));
         }
-        Ok(post_process(text, strength))
+        Ok(post_process(text))
     }
 
     async fn repair(&self, original: &str, instruction: &str) -> Result<String> {
@@ -114,7 +114,6 @@ impl TextCleaner for OpenAiCleaner {
         if text.is_empty() {
             return Err(anyhow!("LLM 返回空文本（原始响应：{v}）"));
         }
-        // 修正结果也走 post_process 做 pangu 兜底
-        Ok(post_process(text, Strength::Standard))
+        Ok(post_process(text))
     }
 }

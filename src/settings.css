@@ -1,0 +1,112 @@
+/* drop-typing — 设置页面样式（配合 Shoelace） */
+
+:root { color-scheme: light dark; }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  font-size: 14px; color: var(--sl-color-neutral-900); background: var(--sl-color-neutral-50);
+}
+
+/* ---- 布局 ---- */
+#shell { display: flex; height: 100%; }
+
+#menu {
+  flex: none; width: 180px; padding: 16px 0;
+  background: var(--sl-color-neutral-0);
+  border-right: 1px solid var(--sl-color-neutral-200);
+}
+#menu ul { list-style: none; margin: 0; padding: 0; }
+#menu li {
+  padding: 10px 20px; cursor: pointer; font-size: 14px; font-weight: 500;
+  color: var(--sl-color-neutral-700); border-left: 3px solid transparent;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+#menu li:hover { background: var(--sl-color-neutral-100); }
+#menu li.active {
+  color: var(--sl-color-primary-600);
+  border-left-color: var(--sl-color-primary-600);
+  background: var(--sl-color-primary-50);
+}
+
+#content { flex: 1; min-width: 0; padding: 16px 32px 24px; overflow-y: auto; }
+.panel { display: none; }
+.panel.active { display: block; }
+.panel > label { display: block; font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+.help { margin: 0 0 12px; font-size: 13px; color: var(--sl-color-neutral-500); line-height: 1.5; }
+
+/* ---- Toast 堆叠 ---- */
+#toast-stack { position: fixed; top: 16px; right: 16px; z-index: 999; display: flex; flex-direction: column; gap: 8px; width: 360px; }
+#alert-success, #alert-error { display: none; }
+
+/* ---- 编辑区 ---- */
+.editor-wrap { position: relative; }
+.editor-wrap .spinner {
+  display: none; position: absolute; top: 12px; right: 14px; z-index: 2;
+  --indicator-color: var(--sl-color-primary-600);
+  font-size: 20px;
+}
+.editor-wrap.loading .spinner { display: block; }
+.editor-wrap.loading textarea { opacity: 0.55; pointer-events: none; }
+
+textarea {
+  display: block; width: 100%; padding: 12px 14px;
+  border: 1px solid var(--sl-color-neutral-300); border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px;
+  line-height: 1.6; color: var(--sl-color-neutral-900);
+  background: var(--sl-color-neutral-0); resize: vertical;
+  transition: border-color 0.2s, box-shadow 0.2s, opacity 0.3s;
+}
+textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-shadow: 0 0 0 3px var(--sl-color-primary-100); }
+
+/* ---- 按钮行 ---- */
+.actions { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
+
+/* ---- 样式子标签 ---- */
+#style-tabs-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+#style-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+#style-tabs sl-button::part(base) { border-radius: 999px; }
+/* 自定义样式 tab 上的删除图标 */
+.style-tab-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.style-tab-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+  background: var(--sl-color-neutral-300);
+  color: var(--sl-color-neutral-700);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.style-tab-custom:hover .style-tab-delete {
+  opacity: 1;
+}
+/* 添加样式按钮 */
+#btn-add-style {
+  flex: none;
+}
+/* 名称提示 */
+.name-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--sl-color-neutral-500);
+}

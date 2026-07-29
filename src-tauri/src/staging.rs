@@ -37,7 +37,13 @@ impl Staging {
             last_error: Arc::new(Mutex::new(None)),
         };
 
-        // 前端关闭按钮：清空内容与异常态
+        // 前端清空按钮：清空暂存条文本（不提交、不粘贴），保持窗口可见
+        let st = staging.clone();
+        app.listen("drop-typing://clear", move |_| {
+            st.clear();
+        });
+
+        // 前端关闭按钮：清空内容与异常态（窗口由前端直接隐藏）
         let st = staging.clone();
         app.listen("drop-typing://close", move |_| {
             st.dismiss();
@@ -85,6 +91,19 @@ impl Staging {
         if let Some(win) = self.window() {
             let _ = win.hide();
         }
+    }
+
+    /// 清空暂存条内容，但不隐藏窗口（与 dismiss 的区别：不关闭窗口）。
+    fn clear(&self) {
+        *self.text.lock().unwrap() = String::new();
+        *self.last_error.lock().unwrap() = None;
+        self.emit_text();
+        let _ = self.app.emit("drop-typing://status", serde_json::json!({ "status": "" }));
+        let _ = self.app.emit("drop-typing://partial", serde_json::json!({ "text": "" }));
+        let _ = self.app.emit("drop-typing://busy", serde_json::json!({ "busy": false }));
+        let _ = self.app.emit("drop-typing://recording", serde_json::json!({ "recording": false }));
+        let _ = self.app.emit("drop-typing://repair-note", serde_json::json!({ "text": "" }));
+        let _ = self.app.emit("drop-typing://command-clear", ());
     }
 
     /// 关闭按钮：清空内容、清除异常态（窗口由前端直接隐藏）

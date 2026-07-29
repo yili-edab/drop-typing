@@ -21,6 +21,8 @@ pub mod hotkey;
 pub mod inject;
 pub mod llm;
 pub mod pipeline;
+pub mod prompts;
+pub mod settings;
 pub mod staging;
 
 use staging::{MAX_HEIGHT, WIN_WIDTH};
@@ -51,10 +53,11 @@ pub fn run() {
             .visible(false)
             .build()?;
 
-            // ……且 M1 暂存条为只读展示：直接忽略鼠标事件，
-            // 窗口永远不会成为 key window，等效于 non-activating panel。
-            // M3 加入手动编辑时需移除该行并改用 NSPanel 方案。
-            let _ = window.set_ignore_cursor_events(true);
+            // 注册设置相关事件处理器
+            settings::register_settings_handlers(app.handle());
+
+            // 发送可用样式列表给暂存条
+            settings::emit_styles(app.handle());
 
             // Windows 平台创建系统托盘图标（macOS 通过 Dock 可见，无需托盘）
             #[cfg(target_os = "windows")]
@@ -62,9 +65,12 @@ pub fn run() {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder};
                 use tauri::tray::TrayIconBuilder;
 
+                let settings_item = MenuItemBuilder::with_id("settings", "设置")
+                    .build(app.handle())?;
                 let quit_item = MenuItemBuilder::with_id("quit", "退出 drop-typing")
                     .build(app.handle())?;
                 let menu = MenuBuilder::new(app.handle())
+                    .item(&settings_item)
                     .item(&quit_item)
                     .build()?;
                 let _tray = TrayIconBuilder::new()
@@ -74,6 +80,24 @@ pub fn run() {
                     .on_menu_event(|app, event| {
                         if event.id() == "quit" {
                             app.exit(0);
+                        }
+                        if event.id() == "settings" {
+                            if let Some(win) = app.get_webview_window("settings") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            } else {
+                                let _ = tauri::WebviewWindowBuilder::new(
+                                    app,
+                                    "settings",
+                                    tauri::WebviewUrl::App("settings.html".into()),
+                                )
+                                .title("drop-typing 设置")
+                                .inner_size(900.0, 600.0)
+                                .resizable(true)
+                                .decorations(true)
+                                .center()
+                                .build();
+                            }
                         }
                     })
                     .build(app.handle())?;

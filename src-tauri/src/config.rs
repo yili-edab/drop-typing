@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::command::Modifier;
 use crate::hotkey::{Bindings, KeySpec};
@@ -37,7 +37,7 @@ fn default_command_countdown() -> u64 {
 
 // ── 语音指令词表条目类型（M4）──────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CommandActionEntry {
     pub phrase: String,
     #[serde(default)]
@@ -45,31 +45,31 @@ pub struct CommandActionEntry {
     pub key: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CommandModifierEntry {
     pub phrase: String,
     pub modifier: Modifier,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CommandKeyEntry {
     pub phrase: String,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CommandStopEntry {
     pub phrase: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CommandHomophoneEntry {
     pub phrase: String,
     pub letter: String,
 }
 
 /// 语音指令配置（M4 指令通道）。
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct CommandConfig {
     /// 倒计时毫秒（可选，覆盖顶层 command_countdown_ms）
     #[serde(default)]
@@ -120,7 +120,7 @@ impl<'de> Deserialize<'de> for Modifier {
 ///
 /// `protocol` 缺省时按旧版 `provider` 写法推断（向后兼容 `bailian-realtime` /
 /// `bailian-http` / `bailian`）。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AsrConfig {
     #[serde(default = "default_asr_provider")]
     pub provider: String,
@@ -150,7 +150,7 @@ impl Default for AsrConfig {
 ///
 /// 与 ASR 同样约定：`provider` 是厂商名，`protocol` 决定适配器
 /// （`openai-chat` 默认 / `anthropic-messages`）。
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LlmConfig {
     #[serde(default)]
     pub provider: Option<String>,
@@ -165,13 +165,17 @@ pub struct LlmConfig {
     /// 优化强度档位（`conservative` / `standard`，默认 standard）
     #[serde(default)]
     pub strength: Option<String>,
+    /// 当前选中的润色样式（`high_eq` / `low_eq` / `anti_pua` / `pua`），
+    /// None 表示不选任何样式，仅用基础润色提示词
+    #[serde(default)]
+    pub current_style: Option<String>,
 }
 
 /// 快捷键原始配置（TOML 中的字符串列表）。
 ///
 /// 每条通道的按键由一组 KeySpec 字符串定义，运行时解析为 `Bindings`。
 /// 未配置时使用平台默认值。
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct HotkeyRawConfig {
     /// 输入/提交通道（长按录音，短按确认）
     #[serde(default)]
@@ -214,7 +218,7 @@ fn parse_or_default(
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub asr: AsrConfig,
@@ -353,6 +357,17 @@ impl Config {
                 defaults
             }
         }
+    }
+
+    /// 将当前配置写回 ~/.drop-typing.toml。
+    /// 采用全量序列化覆盖策略（后续可改为部分合并以保留注释）。
+    pub fn save(&self) -> Result<(), String> {
+        let path = dirs::home_dir()
+            .ok_or_else(|| "无法确定家目录".to_string())?
+            .join(".drop-typing.toml");
+        let text = toml::to_string_pretty(self)
+            .map_err(|e| format!("配置序列化失败：{e}"))?;
+        std::fs::write(&path, text).map_err(|e| format!("配置文件写入失败（{}）：{e}", path.display()))
     }
 
     /// 宽松加载：永远返回一份可用配置 + 可选的告警信息。

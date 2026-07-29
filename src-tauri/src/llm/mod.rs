@@ -18,25 +18,6 @@ use async_trait::async_trait;
 
 use crate::config::Config;
 
-/// 优化强度档位（PRD 4.1）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Strength {
-    /// 保守：只加标点，不改语序措辞
-    Conservative,
-    /// 标准（默认）：去口水词 + 标点 + 中英空格 + 适度结构化
-    Standard,
-}
-
-impl Strength {
-    pub fn from_config(s: &str) -> Self {
-        match s {
-            "conservative" => Strength::Conservative,
-            // 未知值回退默认档
-            _ => Strength::Standard,
-        }
-    }
-}
-
 /// 语音修正专用 system prompt。输入原文 + 修正说明，输出修正后全文。
 fn repair_system_prompt() -> &'static str {
     "你是语音转写文本的修正助手。你会收到两部分：\
@@ -45,31 +26,12 @@ fn repair_system_prompt() -> &'static str {
      不要输出任何解释、引号或前后缀，不要输出修正说明本身。"
 }
 
-/// 清洗档位对应的 system prompt。共同约束：只输出清洗后正文。
-fn system_prompt(strength: Strength) -> &'static str {
-    match strength {
-        Strength::Conservative => {
-            "你是语音转写文本的标点修正器。只做一件事：为文本添加/修正正确的标点符号\
-             （逗号、句号、问号等）。绝对不要改动任何措辞、语序，不要增删任何字词，\
-             包括口语填充词也原样保留。只输出修正后的正文，不要输出任何解释、引号或前后缀。"
-        }
-        Strength::Standard => {
-            "你是语音转写文本的清洗器。按以下规则清洗口语文本：\n\
-             1. 修正标点（逗号、句号、问号等）；\n\
-             2. 去除口水话与填充词（如“嗯”“那个”“就是说”“我觉得吧”等）；\n\
-             3. 中文与英文/数字之间加空格（pangu 风格）；\n\
-             4. 适度的口语结构化：明显的“第一…第二…”等枚举表达可整理为列表，\
-             但不要过度改写，保持原意与措辞。\n\
-             只输出清洗后的正文，不要输出任何解释、引号或前后缀。"
-        }
-    }
-}
-
 /// 文本清洗接口。
 #[async_trait]
 pub trait TextCleaner: Send + Sync {
     /// 口语清洗（输入通道）：去掉口水话、修正标点、中英空格。
-    async fn clean(&self, text: &str, strength: Strength) -> Result<String>;
+    /// `system_prompt` 由调用方根据用户配置构建后传入。
+    async fn clean(&self, text: &str, system_prompt: &str) -> Result<String>;
 
     /// 语音修正（修正通道）：根据修正说明修改原文，输出修正后全文。
     /// `original` 是暂存条当前全文，`instruction` 是用户说出的修正指令（ASR 转写结果）。
@@ -106,13 +68,9 @@ pub fn cleaner_from_config(cfg: &Config) -> Option<Arc<dyn TextCleaner>> {
     }
 }
 
-/// 清洗结果后处理。中英混排空格的本地兜底只在标准档应用——保守档约定
-/// "只加标点，不改语序措辞"，不做额外改写。
-pub(crate) fn post_process(text: &str, strength: Strength) -> String {
-    match strength {
-        Strength::Standard => pangu_spacing(text),
-        Strength::Conservative => text.to_string(),
-    }
+/// 清洗结果后处理。始终应用中英混排空格正则兜底。
+pub(crate) fn post_process(text: &str) -> String {
+    pangu_spacing(text)
 }
 
 /// 中英混排空格兜底（pangu 风格）：CJK 字符与 ASCII 字母/数字相邻时插入空格。

@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::{post_process, repair_system_prompt, system_prompt, Strength, TextCleaner};
+use super::{post_process, repair_system_prompt, TextCleaner};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -42,11 +42,11 @@ impl AnthropicCleaner {
 
 #[async_trait]
 impl TextCleaner for AnthropicCleaner {
-    async fn clean(&self, text: &str, strength: Strength) -> Result<String> {
+    async fn clean(&self, text: &str, system_prompt: &str) -> Result<String> {
         let body = json!({
             "model": self.model,
             "max_tokens": 4096,
-            "system": system_prompt(strength),
+            "system": system_prompt,
             "messages": [
                 { "role": "user", "content": text }
             ]
@@ -84,7 +84,7 @@ impl TextCleaner for AnthropicCleaner {
         if text.is_empty() {
             return Err(anyhow!("LLM 返回空文本（原始响应：{v}）"));
         }
-        Ok(post_process(text, strength))
+        Ok(post_process(text))
     }
 
     async fn repair(&self, original: &str, instruction: &str) -> Result<String> {
@@ -130,6 +130,6 @@ impl TextCleaner for AnthropicCleaner {
         if text.is_empty() {
             return Err(anyhow!("LLM 返回空文本（原始响应：{v}）"));
         }
-        Ok(post_process(text, Strength::Standard))
+        Ok(post_process(text))
     }
 }

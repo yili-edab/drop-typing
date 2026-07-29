@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
+import { resolve } from "path";
 
 export default defineConfig({
-  // Tauri 开发模式下期望固定端口
   clearScreen: false,
   server: {
     port: 1420,
@@ -15,5 +15,11 @@ export default defineConfig({
     target: "es2021",
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        settings: resolve(__dirname, "settings.html"),
+      },
+    },
   },
 });

@@ -1,0 +1,17 @@
+/* Shoelace 主题：同时加载 light/dark，由 JS 通过 sl-theme-dark class 切换 */
+@import '@shoelace-style/shoelace/dist/themes/light.css';
+@import '@shoelace-style/shoelace/dist/themes/dark.css';
+
+/* 覆盖 Shoelace 主色为 drop-typing 橙色 */
+:root {
+  --sl-color-primary-50: #fff3e6;
+  --sl-color-primary-100: #ffe0bf;
+  --sl-color-primary-200: #ffcc99;
+  --sl-color-primary-300: #ffb873;
+  --sl-color-primary-400: #ffa34d;
+  --sl-color-primary-500: #ff821e;
+  --sl-color-primary-600: #e6731b;
+  --sl-color-primary-700: #cc6418;
+  --sl-color-primary-800: #b35615;
+  --sl-color-primary-900: #994712;
+}

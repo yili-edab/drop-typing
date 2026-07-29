@@ -1,0 +1,363 @@
+//! 设置事件处理（M5）。
+//!
+//! 注册所有设置相关的事件监听器。提示词管理已迁移至 `prompts` 模块。
+
+use tauri::{AppHandle, Emitter, Listener, Manager};
+
+use crate::config::Config;
+use crate::prompts::{self, PromptConfig};
+
+// ── 事件处理注册 ──────────────────────────────────────────
+
+pub fn register_settings_handlers(app: &AppHandle) {
+    let app_handle = app.clone();
+
+    // ── 暂存条请求打开设置窗口
+    app.listen("drop-typing://open-settings", move |_| {
+        if let Some(win) = app_handle.get_webview_window("settings") {
+            let _ = win.show();
+            let _ = win.set_focus();
+        } else {
+            let _ = tauri::WebviewWindowBuilder::new(
+                &app_handle,
+                "settings",
+                tauri::WebviewUrl::App("settings.html".into()),
+            )
+            .title("drop-typing 设置")
+            .inner_size(900.0, 600.0)
+            .resizable(true)
+            .decorations(true)
+            .center()
+            .build();
+        }
+    });
+
+    // ── 暂存条主动请求样式列表
+    let ah = app.clone();
+    app.listen("drop-typing://get-styles", move |_| {
+        emit_styles_inner(&ah);
+    });
+
+    // ── 设置页面加载完成 → 发送当前提示词 + 默认值
+    let ah = app.clone();
+    app.listen("drop-typing://settings-ready", move |_| {
+        eprintln!("[drop-typing] settings-ready received");
+        let pc = prompts::load_prompts();
+        let defaults = prompts::default_prompt_config();
+        let _ = ah.emit(
+            "drop-typing://config",
+            serde_json::json!({ "prompts": pc, "defaults": defaults }),
+        );
+    });
+
+    // ── 保存提示词
+    let ah = app.clone();
+    app.listen("drop-typing://save-config", move |ev| {
+        let raw = ev.payload();
+        eprintln!("[drop-typing] save-config received, payload len={}", raw.len());
+        let payload: serde_json::Value =
+            serde_json::from_str(raw).unwrap_or_default();
+        if let Some(prompts_json) = payload.get("prompts") {
+            match serde_json::from_value::<PromptConfig>(prompts_json.clone()) {
+                Ok(pc) => {
+                    match prompts::save_prompts(&pc) {
+                        Ok(()) => {
+                            eprintln!("[drop-typing] prompts saved to ~/.drop-typing/prompts.json");
+                            let _ = ah.emit(
+                                "drop-typing://config-saved",
+                                serde_json::json!({ "success": true }),
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("[drop-typing] prompts save failed: {e}");
+                            let _ = ah.emit(
+                                "drop-typing://config-saved",
+                                serde_json::json!({ "success": false, "error": e }),
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("提示词 JSON 解析失败：{e}");
+                    eprintln!("[drop-typing] {msg}");
+                    let _ = ah.emit(
+                        "drop-typing://config-saved",
+                        serde_json::json!({ "success": false, "error": msg }),
+                    );
+                }
+            }
+        } else {
+            eprintln!("[drop-typing] save-config: missing 'prompts' field");
+        }
+    });
+
+    // ── 重置提示词（移除用户配置 → 回退默认值）
+    let ah = app.clone();
+    app.listen("drop-typing://reset-prompt", move |ev| {
+        eprintln!("[drop-typing] === reset-prompt received ===");
+        eprintln!("[drop-typing] reset-prompt raw payload: {}", ev.payload());
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let key = payload.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        eprintln!("[drop-typing] reset-prompt key={key}");
+
+        let default_text = if key == "base" {
+            prompts::default_base_prompt().to_string()
+        } else {
+            prompts::default_style_prompt(key).unwrap_or("").to_string()
+        };
+        eprintln!("[drop-typing] reset-prompt default_text len={}", default_text.len());
+
+        // 从 prompts.json 移除该字段
+        let mut pc = prompts::load_prompts();
+        if key == "base" {
+            pc.base = None;
+            eprintln!("[drop-typing] reset-prompt set pc.base=None");
+        } else if let Some(ref mut styles) = pc.styles {
+            styles.remove(key);
+            eprintln!("[drop-typing] reset-prompt removed key={key} from styles");
+        }
+        // 如果重置的是当前选中的样式，清除 current_style
+        let (mut cfg, _) = Config::load_lenient();
+        if cfg.llm.current_style.as_deref() == Some(key) {
+            cfg.llm.current_style = None;
+            let _ = cfg.save();
+            eprintln!("[drop-typing] reset-prompt cleared current_style for key={key}");
+        }
+        match prompts::save_prompts(&pc) {
+            Ok(()) => eprintln!("[drop-typing] reset-prompt saved to prompts.json"),
+            Err(e) => eprintln!("[drop-typing] reset-prompt save failed: {e}"),
+        }
+
+        eprintln!("[drop-typing] reset-prompt emitting response, default_text len={}", default_text.len());
+        let _ = ah.emit(
+            "drop-typing://prompt-reset",
+            serde_json::json!({ "key": key, "default_text": default_text }),
+        );
+        eprintln!("[drop-typing] reset-prompt response emitted");
+    });
+
+    // ── AI 优化提示词
+    let ah = app.clone();
+    app.listen("drop-typing://ai-optimize", move |ev| {
+        eprintln!("[drop-typing] ai-optimize received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let key = payload
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let text = payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let intent = payload
+            .get("intent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if text.is_empty() {
+            let _ = ah.emit(
+                "drop-typing://ai-optimize-result",
+                serde_json::json!({ "key": key, "error": "提示词为空，无法优化" }),
+            );
+            return;
+        }
+
+        let (cfg, _) = Config::load_lenient();
+        let cleaner = match crate::llm::cleaner_from_config(&cfg) {
+            Some(c) => c,
+            None => {
+                let _ = ah.emit(
+                    "drop-typing://ai-optimize-result",
+                    serde_json::json!({ "key": key, "error": "请先在配置文件中配置 [llm] 段以使用 AI 优化功能" }),
+                );
+                return;
+            }
+        };
+
+        let ah2 = ah.clone();
+        tauri::async_runtime::spawn(async move {
+            eprintln!("[drop-typing] ai-optimize calling LLM...");
+            match ai_optimize_prompt(&*cleaner, &text, &intent).await {
+                Ok(optimized) => {
+                    eprintln!("[drop-typing] ai-optimize success, len={}", optimized.len());
+                    let _ = ah2.emit(
+                        "drop-typing://ai-optimize-result",
+                        serde_json::json!({ "key": key, "optimized": optimized }),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[drop-typing] ai-optimize failed: {e}");
+                    let _ = ah2.emit(
+                        "drop-typing://ai-optimize-result",
+                        serde_json::json!({ "key": key, "error": e }),
+                    );
+                }
+            }
+        });
+    });
+
+    // ── 新增自定义样式
+    let ah = app.clone();
+    app.listen("drop-typing://add-style", move |ev| {
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let key = payload
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // 校验
+        if key.trim().is_empty() {
+            let _ = ah.emit(
+                "drop-typing://style-added",
+                serde_json::json!({ "success": false, "error": "样式名称不能为空" }),
+            );
+            return;
+        }
+        if prompts::is_builtin_style(&key) {
+            let _ = ah.emit(
+                "drop-typing://style-added",
+                serde_json::json!({ "success": false, "error": "不能使用与内置样式相同的名称" }),
+            );
+            return;
+        }
+
+        let mut pc = prompts::load_prompts();
+        let styles = pc.styles.get_or_insert_with(prompts::StylePrompts::new);
+        if styles.contains_key(&key) {
+            let _ = ah.emit(
+                "drop-typing://style-added",
+                serde_json::json!({ "success": false, "error": "样式名称已存在" }),
+            );
+            return;
+        }
+
+        styles.insert(key.clone(), String::new());
+        let _ = prompts::save_prompts(&pc);
+        emit_styles_inner(&ah);
+        let _ = ah.emit(
+            "drop-typing://style-added",
+            serde_json::json!({ "success": true, "key": key }),
+        );
+    });
+
+    // ── 删除自定义样式
+    let ah = app.clone();
+    app.listen("drop-typing://delete-style", move |ev| {
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let key = payload
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if prompts::is_builtin_style(&key) {
+            let _ = ah.emit(
+                "drop-typing://style-deleted",
+                serde_json::json!({ "success": false, "error": "不能删除内置样式", "key": key }),
+            );
+            return;
+        }
+
+        let mut pc = prompts::load_prompts();
+        let existed = pc
+            .styles
+            .as_mut()
+            .map(|s| s.remove(&key).is_some())
+            .unwrap_or(false);
+        let _ = prompts::save_prompts(&pc);
+
+        // 如果删除的是当前选中样式，清除
+        let (mut cfg, _) = Config::load_lenient();
+        if cfg.llm.current_style.as_deref() == Some(&key) {
+            cfg.llm.current_style = None;
+            let _ = cfg.save();
+        }
+
+        emit_styles_inner(&ah);
+        let _ = ah.emit(
+            "drop-typing://style-deleted",
+            serde_json::json!({ "success": true, "key": key, "existed": existed }),
+        );
+    });
+}
+
+// ── 启动时 / 请求时事件 ──────────────────────────────────────────
+
+pub fn emit_styles(app: &AppHandle) {
+    emit_styles_inner(app);
+}
+
+fn emit_styles_inner(app: &AppHandle) {
+    let (cfg, _) = Config::load_lenient();
+    let current = cfg.llm.current_style.clone();
+    let pc = prompts::load_prompts();
+
+    let mut styles: Vec<serde_json::Value> = Vec::new();
+    // 内置样式始终在列表中
+    for key in prompts::BUILTIN_STYLE_KEYS {
+        styles.push(serde_json::json!({
+            "key": key,
+            "label": prompts::style_label(key),
+            "builtin": true,
+        }));
+    }
+    // 自定义样式从 prompts 中收集
+    if let Some(ref sp) = pc.styles {
+        for key in sp.keys() {
+            if !prompts::is_builtin_style(key) {
+                styles.push(serde_json::json!({
+                    "key": key,
+                    "label": prompts::style_label(key),
+                    "builtin": false,
+                }));
+            }
+        }
+    }
+    let _ = app.emit(
+        "drop-typing://styles",
+        serde_json::json!({ "styles": styles, "current": current }),
+    );
+}
+
+// ── AI 优化 ──────────────────────────────────────────
+
+async fn ai_optimize_prompt(
+    cleaner: &dyn crate::llm::TextCleaner,
+    current: &str,
+    intent: &str,
+) -> Result<String, String> {
+    let meta_prompt = format!(
+        "你是一个提示词优化专家。用户有一段用于语音转写后处理的系统提示词。\
+         这段提示词会发送给大模型，指示它如何清洗和改写口语化的语音转写文本。\n\n\
+         以下是用户提出的优化意图，请根据此意图改写提示词：\n\n\
+         【优化意图】\n{intent}\n\n\
+         【当前提示词】\n{current}\n\n\
+         改写要求：\n\
+         1. 保持提示词的结构化格式，使用 1. 2. 3. 这样的编号；\n\
+         2. 确保指令清晰、无歧义，每条规则独立成行；\n\
+         3. 保留末尾「只输出清洗后的正文，不要输出任何解释、引号或前后缀」这条关键约束；\n\
+         4. 只输出优化后的提示词全文，不要输出任何解释或前后缀。"
+    );
+
+    let system_prompt =
+        "你是一个提示词优化专家，擅长将模糊的自然语言需求转化为精准的结构化指令。\
+         只输出优化后的提示词全文，不要输出任何额外内容。";
+
+    let result = cleaner
+        .clean(&meta_prompt, system_prompt)
+        .await
+        .map_err(|e| format!("LLM 调用失败：{e:#}"))?;
+
+    if result.trim().is_empty() {
+        return Err("LLM 返回了空文本".to_string());
+    }
+    Ok(result)
+}

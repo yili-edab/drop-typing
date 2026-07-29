@@ -1,3 +1,5 @@
+// drop-typing — 暂存条前端
+
 import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -39,12 +41,45 @@ function renderText() {
   resize();
 }
 
-// ---- 关闭按钮 ----
+// ---- 清空按钮 ----
 
-document.getElementById("close-btn")!.addEventListener("click", () => {
+document.getElementById("clear-btn")!.addEventListener("click", () => {
+  // 只清空暂存条文本（不提交、不粘贴），保持窗口可见
   bar.classList.remove("busy", "recording");
-  emit("drop-typing://close");
-  getCurrentWindow().hide();
+  emit("drop-typing://clear");
+});
+
+// ---- 润色风格下拉框 + 齿轮按钮 ----
+
+const styleSelect = document.getElementById("style-select") as HTMLSelectElement;
+const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
+
+// 主动请求样式列表（解决 emit_styles 早于前端加载就绪的时序问题）
+function requestStyles() {
+  emit("drop-typing://get-styles");
+}
+
+listen<{ styles: { key: string; label: string; builtin: boolean }[]; current: string | null }>(
+  "drop-typing://styles",
+  (e) => {
+    styleSelect.innerHTML = '<option value="">无</option>';
+    for (const s of e.payload.styles) {
+      const opt = document.createElement("option");
+      opt.value = s.key;
+      opt.textContent = s.label;
+      if (s.key === e.payload.current) opt.selected = true;
+      styleSelect.appendChild(opt);
+    }
+  }
+);
+
+styleSelect.addEventListener("change", () => {
+  const val = styleSelect.value || null;
+  emit("drop-typing://select-style", { style: val });
+});
+
+settingsBtn.addEventListener("click", () => {
+  emit("drop-typing://open-settings");
 });
 
 // ---- Rust → 前端事件 ----
@@ -107,7 +142,7 @@ listen<{ seconds: number }>("drop-typing://command-tick", (e) => {
   countdownEl.classList.toggle("visible", e.payload.seconds > 0);
 });
 
-// 清除指令展示（执行完毕 / 新录音开始 / 关闭按钮）
+// 清除指令展示（执行完毕 / 新录音开始 / 清空按钮）
 listen("drop-typing://command-clear", () => {
   bar.classList.remove("command-mode");
   commandEl.textContent = "";
@@ -140,3 +175,5 @@ requestAnimationFrame(() => {
   bar.style.minWidth = `${bar.getBoundingClientRect().width}px`;
 });
 emit("drop-typing://ready");
+// ready 之后主动拉取样式列表（解决 emit_styles 早于监听注册的时序问题）
+requestStyles();

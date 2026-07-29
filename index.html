@@ -8,18 +8,26 @@
   </head>
   <body>
     <div id="bar">
-      <div id="mic" aria-hidden="true">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-          <line x1="12" y1="19" x2="12" y2="22"/>
-        </svg>
+      <!-- 顶部工具栏：状态 / 风格 / 齿轮靠右 -->
+      <div id="toolbar">
+        <div id="status"></div>
+        <select id="style-select"></select>
+        <button id="settings-btn" aria-label="打开设置" title="设置">⚙</button>
       </div>
-      <div id="status"></div>
-      <div id="text"><span id="final"></span><span id="part"></span><div id="repair-note"></div><div id="command"></div></div>
-      <div id="countdown"></div>
-      <button id="close-btn" aria-label="关闭暂存条" title="关闭">✕</button>
+      <!-- 主体行：话筒 → 文字 ← 清空 -->
+      <div id="body-row">
+        <div id="mic" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+          </svg>
+        </div>
+        <div id="text"><span id="final"></span><span id="part"></span><div id="repair-note"></div><div id="command"></div></div>
+        <button id="clear-btn" aria-label="清空暂存条" title="清空">清空</button>
+        <div id="countdown"></div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -6,10 +6,10 @@
 //!
 //! - 配置读取与 App 一致：~/.drop-typing.toml 的 [llm] 段
 //! - 未配置 [llm] 或缺 api_key 时提示退出（此时 App 行为为 ASR 直出）
-//! - 依次用 conservative / standard 两档各清洗一遍，方便对比
 
 use drop_typing_lib::config::Config;
-use drop_typing_lib::llm::{self, Strength};
+use drop_typing_lib::llm;
+use drop_typing_lib::prompts;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -32,18 +32,18 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("[test_llm] 配置警告：{w}");
     }
     println!(
-        "[test_llm] protocol={} model={:?} strength={}",
+        "[test_llm] protocol={} model={:?}",
         cfg.llm_protocol(),
         cfg.llm.model,
-        cfg.llm_strength()
     );
     let cleaner = llm::cleaner_from_config(&cfg).ok_or_else(|| {
         anyhow::anyhow!("未配置 [llm] 或缺 api_key（此时 App 行为为 ASR 直出，不清洗）")
     })?;
 
-    for strength in [Strength::Conservative, Strength::Standard] {
-        let cleaned = cleaner.clean(&text, strength).await?;
-        println!("[test_llm] {strength:?} 清洗结果：{cleaned}");
-    }
+    // 使用默认提示词
+    let prompt = prompts::default_base_prompt();
+    let cleaned = cleaner.clean(&text, prompt).await?;
+    println!("[test_llm] 清洗结果：{cleaned}");
+
     Ok(())
 }

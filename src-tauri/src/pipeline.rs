@@ -16,7 +16,7 @@
 
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow;
@@ -29,6 +29,8 @@ use crate::config::Config;
 use crate::hotkey::{self, HotkeyEvent};
 use crate::inject::{self, Injector};
 use crate::llm::{self, TextCleaner};
+use crate::prompts;
+use crate::settings;
 use crate::staging::Staging;
 
 /// 录音目的：输入通道（右 ⌘）、修正通道（右 ⌥）还是指令通道（右 ⇧，M4）。
@@ -94,6 +96,28 @@ pub fn start(app: AppHandle) {
     let staging_for_ready = staging.clone();
     app.listen("drop-typing://ready", move |_| staging_for_ready.republish());
 
+    // 润色样式选择（暂存条下拉框 → 更新当前样式）
+    let current_style: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(
+        cfg.llm.current_style.clone(),
+    ));
+    let style_for_listener = current_style.clone();
+    let app_for_style = app.clone();
+    app.listen("drop-typing://select-style", move |ev| {
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let style = payload
+            .get("style")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        *style_for_listener.lock().unwrap() = style;
+        // 持久化当前样式选择到配置文件
+        let (mut cfg, _) = Config::load_lenient();
+        cfg.llm.current_style = style_for_listener.lock().unwrap().clone();
+        let _ = cfg.save();
+        // 重新发送样式信息以更新暂存条下拉框选中项
+        crate::settings::emit_styles(&app_for_style);
+    });
+
     let (tx, rx) = mpsc::channel::<HotkeyEvent>();
     let staging_for_listener = staging.clone();
     let hotkey_bindings = cfg.hotkey_bindings();
@@ -104,7 +128,7 @@ pub fn start(app: AppHandle) {
     });
 
     std::thread::spawn(move || {
-        run_loop(cfg, backend, cleaner, injector, staging, rx, lexicon);
+        run_loop(cfg, backend, cleaner, injector, staging, rx, lexicon, current_style);
     });
 }
 
@@ -116,6 +140,7 @@ fn run_loop(
     staging: Staging,
     rx: mpsc::Receiver<HotkeyEvent>,
     lexicon: Arc<command::Lexicon>,
+    current_style: Arc<Mutex<Option<String>>>,
 ) {
     let recorder = match AudioRecorder::new() {
         Ok(r) => Some(r),
@@ -128,7 +153,6 @@ fn run_loop(
 
     let mut state = State::Idle;
     let threshold = Duration::from_millis(cfg.long_press_threshold_ms);
-    let strength = llm::Strength::from_config(&cfg.llm_strength());
     let poll_interval = Duration::from_millis(50); // 轮询阈值到期
     let double_press = Duration::from_millis(cfg.double_press_window_ms); // 双击窗口（可配置）
     let command_countdown = Duration::from_millis(cfg.effective_command_countdown_ms()); // 指令确认倒计时（M4）
@@ -386,7 +410,12 @@ fn run_loop(
                                 Ok(text) if !text.trim().is_empty() => {
                                     match mode {
                                         RecordMode::Input => {
-                                            clean_and_append(&staging, &cleaner, text.trim(), strength)
+                                            let pc = prompts::load_prompts();
+                                            let prompt = {
+                                                let style = current_style.lock().unwrap().clone();
+                                                prompts::effective_clean_prompt(&pc, style.as_deref())
+                                            };
+                                            clean_and_append(&staging, &cleaner, text.trim(), &prompt)
                                         }
                                         RecordMode::Repair => {
                                             repair_and_replace(&staging, &cleaner, text.trim())
@@ -425,10 +454,17 @@ fn run_loop(
                                 unreachable!()
                             };
                             match r.stop() {
-                                Ok(wav) => spawn_transcribe(
-                                    &staging, p.clone(), &cleaner, strength, mode, wav,
+                                Ok(wav) => {
+                                    let pc = prompts::load_prompts();
+                                    let prompt = {
+                                        let style = current_style.lock().unwrap().clone();
+                                        prompts::effective_clean_prompt(&pc, style.as_deref())
+                                    };
+                                    spawn_transcribe(
+                                    &staging, p.clone(), &cleaner, mode, wav,
                                     &injector, command_countdown, &command_gen, lexicon.clone(),
-                                ),
+                                    prompt,
+                                )}
                                 Err(e) => {
                                     staging.set_status("");
                                     staging.error(&format!("录音失败：{e}"))
@@ -474,13 +510,13 @@ fn spawn_transcribe(
     staging: &Staging,
     provider: Arc<dyn asr::AsrProvider>,
     cleaner: &Option<Arc<dyn TextCleaner>>,
-    strength: llm::Strength,
     mode: RecordMode,
     wav: Vec<u8>,
     injector: &Arc<dyn Injector>,
     command_countdown: Duration,
     command_gen: &Arc<AtomicU64>,
     lexicon: Arc<command::Lexicon>,
+    system_prompt: String,
 ) {
     let staging = staging.clone();
     let cleaner = cleaner.clone();
@@ -496,7 +532,7 @@ fn spawn_transcribe(
         match result {
             Ok(text) if !text.trim().is_empty() => match mode {
                 RecordMode::Input => {
-                    clean_and_append(&staging, &cleaner, text.trim(), strength)
+                    clean_and_append(&staging, &cleaner, text.trim(), &system_prompt)
                 }
                 RecordMode::Repair => {
                     repair_and_replace(&staging, &cleaner, text.trim())
@@ -531,7 +567,7 @@ fn clean_and_append(
     staging: &Staging,
     cleaner: &Option<Arc<dyn TextCleaner>>,
     text: &str,
-    strength: llm::Strength,
+    system_prompt: &str,
 ) {
     let Some(cleaner) = cleaner else {
         staging.append(text);
@@ -543,8 +579,10 @@ fn clean_and_append(
     let raw = text.to_string();
     staging.set_busy(true);
     staging.set_status("润色中");
+    let prompt = system_prompt.to_string();
     tauri::async_runtime::spawn(async move {
-        let result = cleaner.clean(&raw, strength).await;
+        let user_msg = format!("请改写以下文本：\n---\n{raw}\n---");
+        let result = cleaner.clean(&user_msg, &prompt).await;
         staging.set_busy(false);
         staging.set_status("");
         match result {

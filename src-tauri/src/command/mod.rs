@@ -18,8 +18,10 @@ mod lexicon;
 pub use lexicon::Lexicon;
 use lexicon::LexOwned;
 
+use serde::{Deserialize, Serialize};
+
 /// 修饰键（macOS 语义）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Modifier {
     Command,
     Shift,

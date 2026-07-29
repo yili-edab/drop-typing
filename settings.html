@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/shoelace-theme.css" />
+    <link rel="stylesheet" href="/src/settings.css" />
+    <title>drop-typing 设置</title>
+  </head>
+  <body>
+    <div id="shell">
+      <nav id="menu">
+        <ul>
+          <li data-panel="base" class="active">基础润色</li>
+          <li data-panel="advanced">高级润色</li>
+        </ul>
+      </nav>
+      <main id="content">
+
+        <!-- 通知区（Shoelace alert stack） -->
+        <div id="toast-stack">
+          <sl-alert id="alert-success" variant="success" duration="3000" closable></sl-alert>
+          <sl-alert id="alert-error" variant="danger" duration="0" closable></sl-alert>
+        </div>
+
+        <!-- 确认弹窗 -->
+        <sl-dialog id="dlg-confirm" label="确认">
+          <span id="dlg-confirm-msg"></span>
+          <sl-button slot="footer" variant="default" id="dlg-confirm-no">取消</sl-button>
+          <sl-button slot="footer" variant="primary" id="dlg-confirm-yes">确认</sl-button>
+        </sl-dialog>
+
+        <!-- AI 优化意图弹窗 -->
+        <sl-dialog id="dlg-intent" label="AI 优化">
+          <sl-input id="dlg-intent-input" placeholder="输入优化意图，例如：增强结构化、让语气更温和" clearable></sl-input>
+          <sl-button slot="footer" variant="default" id="dlg-intent-cancel">取消</sl-button>
+          <sl-button slot="footer" variant="primary" id="dlg-intent-ok">确定</sl-button>
+        </sl-dialog>
+
+        <!-- 添加样式弹窗 -->
+        <sl-dialog id="dlg-add-style" label="添加新样式">
+          <sl-input id="dlg-add-style-input" placeholder="输入样式名称，例如：professional"
+                    clearable required></sl-input>
+          <p class="help name-hint">名称将作为样式的标识和标签显示</p>
+          <sl-button slot="footer" variant="default" id="dlg-add-style-cancel">取消</sl-button>
+          <sl-button slot="footer" variant="primary" id="dlg-add-style-ok">确定</sl-button>
+        </sl-dialog>
+
+        <!-- 基础润色面板 -->
+        <section id="panel-base" class="panel active">
+          <label for="prompt-base">基础润色提示词</label>
+          <p class="help">系统内置的通用清洗规则。修改后点击「保存」生效。</p>
+          <div class="editor-wrap">
+            <sl-spinner class="spinner"></sl-spinner>
+            <textarea id="prompt-base" rows="12" placeholder="加载中…"></textarea>
+          </div>
+          <div class="actions">
+            <sl-button id="btn-base-reset" variant="default">重置</sl-button>
+            <sl-button id="btn-base-save" variant="primary">保存</sl-button>
+            <sl-button id="btn-base-ai" variant="neutral">AI 优化</sl-button>
+          </div>
+        </section>
+
+        <!-- 高级润色提示词面板 -->
+        <section id="panel-advanced" class="panel">
+          <label>润色风格</label>
+          <p class="help">选择润色风格后，对应的提示词会附加在基础润色提示词之后发送给大模型。</p>
+          <div id="style-tabs-wrap">
+            <div id="style-tabs">
+              <!-- JS 动态填充 -->
+            </div>
+            <sl-button id="btn-add-style" size="small" variant="neutral" pill>
+              <sl-icon name="plus-lg" slot="prefix"></sl-icon> 添加风格
+            </sl-button>
+          </div>
+          <div class="editor-wrap">
+            <sl-spinner class="spinner"></sl-spinner>
+            <textarea id="style-textarea" rows="8" placeholder="加载中…"></textarea>
+          </div>
+          <div class="actions">
+            <sl-button id="btn-style-reset" variant="default">重置</sl-button>
+            <sl-button id="btn-style-save" variant="primary">保存</sl-button>
+            <sl-button id="btn-style-ai" variant="neutral">AI 优化</sl-button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/settings.ts"></script>
+  </body>
+</html>
