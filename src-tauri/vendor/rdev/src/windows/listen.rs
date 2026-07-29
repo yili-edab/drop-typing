@@ -23,8 +23,11 @@ unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARA
         // convert() 返回的 EventType 模式匹配。param 是 WM_KEYDOWN/WM_KEYUP/
         // WM_SYSKEYDOWN/WM_SYSKEYUP 之一时才读 KBDLLHOOKSTRUCT 的 vkCode。
         let msg: u32 = param as u32;
-        let is_rwin = matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP)
-            && get_code(lpdata) == 0x5C; // VK_RWIN
+        let is_win = matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP)
+            && {
+                let vk = get_code(lpdata);
+                vk == 0x5B || vk == 0x5C // VK_LWIN or VK_RWIN
+            };
 
         let opt = convert(param, lpdata);
         if let Some(event_type) = opt {
@@ -45,9 +48,9 @@ unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARA
             }
         }
 
-        // 拦截右 Win 键：返回非零阻止消息传递到系统，避免弹出开始菜单。
-        // 用户回调已在上方调用——App 仍能收到 RepairDown/RepairUp。
-        if is_rwin {
+        // 拦截左右 Win 键：返回非零阻止消息传递到系统，避免弹出开始菜单。
+        // 用户回调已在上方调用——App 仍能收到 MetaLeft/MetaRight 事件。
+        if is_win {
             return 1;
         }
     }

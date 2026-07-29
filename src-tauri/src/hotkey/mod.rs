@@ -35,6 +35,8 @@ pub enum HotkeyEvent {
     CommandUp,
     /// 录音期间有其它键按下（说明右修饰键被当作组合键修饰键使用，应当作废本次录音）
     OtherKeyDown,
+    /// Esc 按下：清空暂存条并隐藏（Windows 专用）
+    CancelDown,
     /// 监听器运行时错误（如权限被收回）
     Error(String),
 }

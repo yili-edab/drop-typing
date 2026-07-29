@@ -162,6 +162,26 @@ fn run_loop(
             Ok(ev) => match ev {
             HotkeyEvent::Error(msg) => staging.error(&msg),
 
+            HotkeyEvent::CancelDown => {
+                // Esc 按下：丢弃当前录音（如果有）、清空暂存条并隐藏窗口
+                if let State::Recording { .. } = &state {
+                    if let Some(r) = &recorder {
+                        r.discard();
+                    }
+                }
+                // 取消尚未执行的指令倒计时
+                command_gen.fetch_add(1, Ordering::SeqCst);
+                staging.take(); // 清空文本（不提交、不粘贴）
+                staging.set_recording(false);
+                staging.set_busy(false);
+                staging.set_status("");
+                staging.set_repair_note("");
+                staging.clear_command();
+                staging.clear_error();
+                staging.hide();
+                state = State::Idle;
+            }
+
             HotkeyEvent::OtherKeyDown => {
                 if let State::Recording { tainted, .. } = &mut state {
                     *tainted = true;
