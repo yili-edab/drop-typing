@@ -4,7 +4,7 @@ use std::os::raw::c_int;
 use std::ptr::null_mut;
 use std::time::SystemTime;
 use winapi::shared::minwindef::{LPARAM, LRESULT, WPARAM};
-use winapi::um::winuser::{CallNextHookEx, GetMessageA, HC_ACTION};
+use winapi::um::winuser::{CallNextHookEx, GetMessageA, HC_ACTION, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP};
 
 static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
 
@@ -19,17 +19,14 @@ impl From<HookError> for ListenError {
 
 unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARAM) -> LRESULT {
     if code == HC_ACTION {
+        // drop-typing: 用 param（Windows 消息 ID）直接判断键盘事件，不依赖
+        // convert() 返回的 EventType 模式匹配。param 是 WM_KEYDOWN/WM_KEYUP/
+        // WM_SYSKEYDOWN/WM_SYSKEYUP 之一时才读 KBDLLHOOKSTRUCT 的 vkCode。
+        let msg: u32 = param as u32;
+        let is_rwin = matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP)
+            && get_code(lpdata) == 0x5C; // VK_RWIN
+
         let opt = convert(param, lpdata);
-
-        // drop-typing: 在事件处理前判定右 Win 键（VK_RWIN = 0x5C）。
-        // 键盘事件的 lpdata 是 KBDLLHOOKSTRUCT，vkCode 在首字段；
-        // 鼠标事件的 lpdata 是 MSLLHOOKSTRUCT，结构不同——故先通过 opt
-        // 确认是键盘事件后才读 vkCode，避免未定义行为。
-        let is_rwin_key = matches!(
-            &opt,
-            Some(EventType::KeyPress(_) | EventType::KeyRelease(_))
-        ) && get_code(lpdata) == 0x5C;
-
         if let Some(event_type) = opt {
             let name = match &event_type {
                 EventType::KeyPress(_key) => match (*KEYBOARD).lock() {
@@ -49,8 +46,8 @@ unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARA
         }
 
         // 拦截右 Win 键：返回非零阻止消息传递到系统，避免弹出开始菜单。
-        // 用户回调已在上面调用，App 仍能感知按键事件。
-        if is_rwin_key {
+        // 用户回调已在上方调用——App 仍能收到 RepairDown/RepairUp。
+        if is_rwin {
             return 1;
         }
     }

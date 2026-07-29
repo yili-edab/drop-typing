@@ -8,19 +8,20 @@ html,
 body {
   margin: 0;
   padding: 0;
+  height: 100%;
   background: transparent;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
     "Helvetica Neue", sans-serif;
   -webkit-user-select: none;
   user-select: none;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  height: 100%;
 }
 
 #bar {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 8px;

@@ -59,8 +59,13 @@ impl Staging {
     }
 
     /// 底部居中定位（窗口高度 = MAX_HEIGHT，只定位一次）。
+    /// 窗口已可见时跳过——位置只设一次，杜绝重复 set_position 导致漂移。
     fn show_at_bottom(&self) {
         let Some(win) = self.window() else { return };
+        // 窗口已可见＝已定位过，直接返回，不再重复 set_position
+        if win.is_visible().unwrap_or(false) {
+            return;
+        }
         if let Ok(Some(monitor)) = win.current_monitor() {
             let scale = monitor.scale_factor();
             let screen = monitor.size();
