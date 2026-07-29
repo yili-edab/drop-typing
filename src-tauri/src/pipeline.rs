@@ -55,6 +55,8 @@ enum State {
         started: Instant,
         tainted: bool,
         mode: RecordMode,
+        /// 暂存条是否已显示（按下后等阈值到期才 show，避免短按一闪而过）
+        bar_shown: bool,
         /// 若本次录音是从 PendingCommit 触发的，携带第一击时间用于双击判定
         pending_since: Option<Instant>,
         /// 实时后端的活动会话（批量后端为 None）
@@ -136,9 +138,13 @@ fn run_loop(
     loop {
         match rx.recv_timeout(poll_interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // 按住期间：超阈值即显示"识别中"（不等松手）
-                if let State::Recording { started, mode, .. } = &state {
+                // 按住期间：超阈值才显示暂存条（避免短按一闪而过），然后设"识别中"
+                if let State::Recording { started, mode, bar_shown, .. } = &mut state {
                     if started.elapsed() >= threshold {
+                        if !*bar_shown {
+                            staging.show();
+                            *bar_shown = true;
+                        }
                         staging.set_busy(true);
                         staging.set_status(mode.recognizing_label());
                     }
@@ -193,7 +199,7 @@ fn run_loop(
                 staging.partial("");
                 staging.set_repair_note(""); // 清除上次修正的修复意见
                 staging.clear_command(); // 清除上次指令的展示/倒计时
-                staging.show();
+                // 暂不 show：等超时判定为长按后才显示，避免短按瞬间闪现
 
                 // 创建 PCM 通道，录音立即开始
                 let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
@@ -269,6 +275,7 @@ fn run_loop(
                     started: Instant::now(),
                     tainted: false,
                     mode,
+                    bar_shown: false,
                     pending_since: carry_pending,
                     session,
                     pending_rx,
@@ -280,6 +287,7 @@ fn run_loop(
                     started,
                     tainted,
                     mode,
+                    bar_shown: _,
                     pending_since,
                     session,
                     pending_rx,

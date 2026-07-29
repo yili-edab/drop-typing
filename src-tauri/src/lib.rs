@@ -23,7 +23,7 @@ pub mod llm;
 pub mod pipeline;
 pub mod staging;
 
-use staging::{MIN_HEIGHT, WIN_WIDTH};
+use staging::{MAX_HEIGHT, WIN_WIDTH};
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -36,10 +36,11 @@ pub fn run() {
                 WebviewUrl::App("index.html".into()),
             )
             .title("drop-typing")
-            .inner_size(WIN_WIDTH, MIN_HEIGHT)
+            .inner_size(WIN_WIDTH, MAX_HEIGHT)
             .resizable(false)
             .decorations(false)
             .transparent(true)
+            .shadow(false)
             .always_on_top(true)
             .skip_taskbar(true)
             .visible_on_all_workspaces(true)

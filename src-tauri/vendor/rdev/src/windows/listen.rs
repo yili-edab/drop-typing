@@ -20,6 +20,16 @@ impl From<HookError> for ListenError {
 unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARAM) -> LRESULT {
     if code == HC_ACTION {
         let opt = convert(param, lpdata);
+
+        // drop-typing: 在事件处理前判定右 Win 键（VK_RWIN = 0x5C）。
+        // 键盘事件的 lpdata 是 KBDLLHOOKSTRUCT，vkCode 在首字段；
+        // 鼠标事件的 lpdata 是 MSLLHOOKSTRUCT，结构不同——故先通过 opt
+        // 确认是键盘事件后才读 vkCode，避免未定义行为。
+        let is_rwin_key = matches!(
+            &opt,
+            Some(EventType::KeyPress(_) | EventType::KeyRelease(_))
+        ) && get_code(lpdata) == 0x5C;
+
         if let Some(event_type) = opt {
             let name = match &event_type {
                 EventType::KeyPress(_key) => match (*KEYBOARD).lock() {
@@ -37,13 +47,11 @@ unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARA
                 callback(event);
             }
         }
-        // drop-typing: 拦截右 Win 键（MetaRight, 0x5C），阻止传递到系统
-        // 从而避免长按右 Win 时弹出开始菜单。
-        // 只对键盘事件做 vkCode 检查（鼠标事件 lpdata 结构不同，不宜调用 get_code）。
-        if let Some(EventType::KeyPress(_) | EventType::KeyRelease(_)) = &opt {
-            if get_code(lpdata) == 0x5C {
-                return 1;
-            }
+
+        // 拦截右 Win 键：返回非零阻止消息传递到系统，避免弹出开始菜单。
+        // 用户回调已在上面调用，App 仍能感知按键事件。
+        if is_rwin_key {
+            return 1;
         }
     }
     CallNextHookEx(HOOK, code, param, lpdata)

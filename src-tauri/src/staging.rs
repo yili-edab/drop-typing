@@ -2,8 +2,9 @@
 //!
 //! 文本归属 Rust 侧（单一事实来源），前端只负责渲染事件。
 //!
-//! 定位：永远固定屏幕底部居中。高度从一行起，随内容增长到上限后滚动；
-//! 宽度由内容自然撑开（前端 fit-content），上限为窗口宽度。
+//! 定位：窗口固定 MAX_HEIGHT，底部居中一次定位后不再移动。
+//! 内容变化由 CSS（align-items: flex-end）在窗口内自然向上生长，
+//! 无需 Rust 侧 resize/reposition。
 
 use std::sync::{Arc, Mutex};
 
@@ -36,17 +37,6 @@ impl Staging {
             last_error: Arc::new(Mutex::new(None)),
         };
 
-        // 前端测量内容高度后通过 "drop-typing://resize" 请求调整窗口高度。
-        // 高度从一行起，上限受 CSS #bar max-height 约束；超出后滚动。
-        let st = staging.clone();
-        app.listen("drop-typing://resize", move |event| {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(event.payload()) {
-                if let Some(h) = v.get("height").and_then(|h| h.as_f64()) {
-                    st.apply_resize(h);
-                }
-            }
-        });
-
         // 前端关闭按钮：清空内容与异常态
         let st = staging.clone();
         app.listen("drop-typing://close", move |_| {
@@ -60,59 +50,24 @@ impl Staging {
         self.app.get_webview_window("staging")
     }
 
-    fn apply_resize(&self, height: f64) {
-        let Some(win) = self.window() else { return };
-        let h = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
-        // 保持底边不动向上长：按窗口自身 scale 计算新旧物理高度差，移动顶边。
-        // 防止内容增长时窗口顶边移出屏幕（Windows 任务栏 + DPI 可能使初位偏小）
-        if let (Ok(size), Ok(pos)) = (win.outer_size(), win.outer_position()) {
-            // 从窗口物理尺寸反推缩放比；若尺寸尚未就绪（宽度为 0）则用显示器 scale 兜底
-            let scale = if size.width > 0 {
-                size.width as f64 / WIN_WIDTH
-            } else {
-                win.current_monitor()
-                    .ok()
-                    .flatten()
-                    .map(|m| m.scale_factor())
-                    .unwrap_or(1.0)
-            };
-            let dy = h * scale - size.height as f64;
-            let new_y = (pos.y as f64 - dy).max(0.0);
-            let _ = win.set_position(PhysicalPosition::new(pos.x, new_y as i32));
-        }
-        let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(WIN_WIDTH, h)));
-    }
-
     // ---------- 显隐与定位 ----------
 
-    /// 显示暂存条：永远屏幕底部居中。
-    /// 按下右 ⌘ 开始录音时才显示；错误（error()）也会顺带显示。
+    /// 显示暂存条：底部居中，距屏幕底边 BOTTOM_OFFSET。
+    /// 窗口高度固定为 MAX_HEIGHT，内容由 CSS 在窗口内向上生长，不再 resize。
     pub fn show(&self) {
         self.show_at_bottom()
     }
 
-    /// 屏幕底部居中定位。
-    /// 使用 current_monitor 获取窗口所在显示器；失败时回退到 available_monitors 中
-    /// 最接近窗口当前位置的显示器（Windows 上 current_monitor 可能因窗口尚未显示而失败）。
+    /// 底部居中定位（窗口高度 = MAX_HEIGHT，只定位一次）。
     fn show_at_bottom(&self) {
         let Some(win) = self.window() else { return };
-        let monitor = win.current_monitor().ok().flatten().or_else(|| {
-            // 回退：从可用显示器中选择最接近窗口当前位置的
-            let monitors = win.available_monitors().ok()?;
-            let cur_pos = win.outer_position().ok()?;
-            monitors.into_iter().min_by_key(|m| {
-                let p = m.position();
-                let dx = cur_pos.x as f64 - p.x as f64;
-                let dy = cur_pos.y as f64 - p.y as f64;
-                ((dx * dx + dy * dy).sqrt() * 1000.0) as i64
-            })
-        });
-        if let Some(monitor) = monitor {
+        if let Ok(Some(monitor)) = win.current_monitor() {
             let scale = monitor.scale_factor();
             let screen = monitor.size();
             let mpos = monitor.position();
+            // 窗口底边 = 屏幕底边 - BOTTOM_OFFSET
             let x = mpos.x as f64 + (screen.width as f64 - WIN_WIDTH * scale) / 2.0;
-            let y = mpos.y as f64 + screen.height as f64 - (BOTTOM_OFFSET + MIN_HEIGHT) * scale;
+            let y = mpos.y as f64 + screen.height as f64 - (BOTTOM_OFFSET + MAX_HEIGHT) * scale;
             let _ = win.set_position(PhysicalPosition::new(
                 x.max(0.0) as i32,
                 y.max(0.0) as i32,
