@@ -63,6 +63,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                use tauri::Manager;
                 use tauri::tray::TrayIconBuilder;
 
                 let settings_item = MenuItemBuilder::with_id("settings", "设置")
