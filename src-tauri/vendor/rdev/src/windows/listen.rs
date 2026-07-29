@@ -1,5 +1,5 @@
 use crate::rdev::{Event, EventType, ListenError};
-use crate::windows::common::{convert, set_key_hook, set_mouse_hook, HookError, HOOK, KEYBOARD};
+use crate::windows::common::{convert, get_code, set_key_hook, set_mouse_hook, HookError, HOOK, KEYBOARD};
 use std::os::raw::c_int;
 use std::ptr::null_mut;
 use std::time::SystemTime;
@@ -35,6 +35,14 @@ unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARA
             };
             if let Some(callback) = &mut GLOBAL_CALLBACK {
                 callback(event);
+            }
+        }
+        // drop-typing: 拦截右 Win 键（MetaRight, 0x5C），阻止传递到系统
+        // 从而避免长按右 Win 时弹出开始菜单。
+        // 只对键盘事件做 vkCode 检查（鼠标事件 lpdata 结构不同，不宜调用 get_code）。
+        if let Some(EventType::KeyPress(_) | EventType::KeyRelease(_)) = &opt {
+            if get_code(lpdata) == 0x5C {
+                return 1;
             }
         }
     }

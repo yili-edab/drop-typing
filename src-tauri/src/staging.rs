@@ -16,7 +16,7 @@ pub(crate) const WIN_WIDTH: f64 = 640.0;
 #[cfg(target_os = "macos")]
 pub(crate) const BOTTOM_OFFSET: f64 = 110.0;
 #[cfg(target_os = "windows")]
-pub(crate) const BOTTOM_OFFSET: f64 = 80.0;
+pub(crate) const BOTTOM_OFFSET: f64 = 96.0;
 /// 窗口高度夹取范围（一行约 60px，最多 ~92px / ~4 行）
 pub(crate) const MIN_HEIGHT: f64 = 60.0;
 pub(crate) const MAX_HEIGHT: f64 = 272.0;
@@ -66,7 +66,16 @@ impl Staging {
         // 保持底边不动向上长：按窗口自身 scale 计算新旧物理高度差，移动顶边。
         // 防止内容增长时窗口顶边移出屏幕（Windows 任务栏 + DPI 可能使初位偏小）
         if let (Ok(size), Ok(pos)) = (win.outer_size(), win.outer_position()) {
-            let scale = size.width as f64 / WIN_WIDTH;
+            // 从窗口物理尺寸反推缩放比；若尺寸尚未就绪（宽度为 0）则用显示器 scale 兜底
+            let scale = if size.width > 0 {
+                size.width as f64 / WIN_WIDTH
+            } else {
+                win.current_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|m| m.scale_factor())
+                    .unwrap_or(1.0)
+            };
             let dy = h * scale - size.height as f64;
             let new_y = (pos.y as f64 - dy).max(0.0);
             let _ = win.set_position(PhysicalPosition::new(pos.x, new_y as i32));
@@ -82,14 +91,28 @@ impl Staging {
         self.show_at_bottom()
     }
 
-    /// 屏幕底部居中定位
+    /// 屏幕底部居中定位。
+    /// 使用 current_monitor 获取窗口所在显示器；失败时回退到 available_monitors 中
+    /// 最接近窗口当前位置的显示器（Windows 上 current_monitor 可能因窗口尚未显示而失败）。
     fn show_at_bottom(&self) {
         let Some(win) = self.window() else { return };
-        if let Ok(Some(monitor)) = win.current_monitor() {
+        let monitor = win.current_monitor().ok().flatten().or_else(|| {
+            // 回退：从可用显示器中选择最接近窗口当前位置的
+            let monitors = win.available_monitors().ok()?;
+            let cur_pos = win.outer_position().ok()?;
+            monitors.into_iter().min_by_key(|m| {
+                let p = m.position();
+                let dx = cur_pos.x as f64 - p.x as f64;
+                let dy = cur_pos.y as f64 - p.y as f64;
+                ((dx * dx + dy * dy).sqrt() * 1000.0) as i64
+            })
+        });
+        if let Some(monitor) = monitor {
             let scale = monitor.scale_factor();
             let screen = monitor.size();
-            let x = (screen.width as f64 - WIN_WIDTH * scale) / 2.0;
-            let y = screen.height as f64 - (BOTTOM_OFFSET + MIN_HEIGHT) * scale;
+            let mpos = monitor.position();
+            let x = mpos.x as f64 + (screen.width as f64 - WIN_WIDTH * scale) / 2.0;
+            let y = mpos.y as f64 + screen.height as f64 - (BOTTOM_OFFSET + MIN_HEIGHT) * scale;
             let _ = win.set_position(PhysicalPosition::new(
                 x.max(0.0) as i32,
                 y.max(0.0) as i32,
