@@ -68,9 +68,11 @@ src-tauri/
 │   │   └── anthropic.rs     #   Anthropic Messages 兼容（如百炼 /apps/anthropic）
 │   ├── audio/recorder.rs    # cpal 录音 → 16kHz 单声道；流式 PCM chunk / 整段 WAV
 │   ├── hotkey/              # trait HotkeySource（平台相关）
-│   │   └── macos.rs         #   rdev 全局监听 + 辅助功能权限检测
+│   │   ├── macos.rs         #   rdev 全局监听 + 辅助功能权限检测
+│   │   └── windows.rs       #   rdev 低级键盘钩子（WH_KEYBOARD_LL），修饰键组合检测
 │   └── inject/              # trait Injector（平台相关）
-│       └── macos.rs         #   arboard 剪贴板 + enigo 按键模拟（Cmd+V / 任意按键组合）
+│       ├── macos.rs         #   arboard 剪贴板 + enigo 按键模拟（Cmd+V / 任意按键组合）
+│       └── windows.rs       #   剪贴板 + 模拟 Ctrl+V
 ├── examples/test_asr.rs     # ASR 独立手动测试入口
 ├── examples/test_llm.rs     # LLM 清洗独立手动测试入口
 └── tauri.conf.json / capabilities/default.json / Info.plist / icons/
@@ -78,7 +80,7 @@ src-tauri/
 
 模块划分原则：
 
-- **平台相关代码集中在 `hotkey/` 与 `inject/` 的 trait 后面**；Windows 移植（PRD：Right Win / Right Alt / Right Shift + Ctrl+V）只需各加一个实现文件，平台依赖在 `Cargo.toml` 的 `[target.'cfg(target_os = "macos")'.dependencies]` 下按 cfg 分支添加
+- **平台相关代码集中在 `hotkey/` 与 `inject/` 的 trait 后面**；Windows 已实现（`hotkey/windows.rs` rdev 低级键盘钩子，默认 Win+Alt 录入 / Ctrl+Alt 修复 / Win+Shift 电脑控制，避开微信语音输入的 Ctrl+Win；`inject/windows.rs` 剪贴板 + 模拟 Ctrl+V），平台依赖在 `Cargo.toml` 的 `[target.'cfg(target_os = "macos")'.dependencies]` 下按 cfg 分支添加
 - **ASR 每厂商一个适配器文件**，通过 `protocol` 字段选择；新增厂商时在 `asr/` 下加文件并实现对应 trait
 - **LLM 每种协议一个适配器文件**（`llm/`，M2），同样通过 `protocol` 选择；清洗失败必须降级为原文追加，不能丢内容
 - 暂存条文本状态由 **Rust 侧**持有（`staging.rs`），前端只通过事件订阅渲染

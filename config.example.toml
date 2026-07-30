@@ -80,11 +80,13 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # command = ["ShiftRight"]    # 右 ⇧：长按语音指令
 # cancel  = ["Escape"]        # Esc：清空暂存条
 
-# ── Windows 默认（Win 组合键）──
+# ── Windows 默认（Alt/Win 组合键）──
+# 默认键已避开已知冲突：Ctrl+Win（微信语音输入）、Shift+Alt（系统输入语言切换）。
+# 若仍与其它软件撞键，改本段即可；或去对方软件中改它的快捷键。
 # [hotkey]
-# trigger = ["Control", "Meta"]   # Ctrl+Win：长按录音，短按确认
-# repair  = ["Meta", "Alt"]       # Win+Alt：长按语音控制
-# command = ["Meta", "Shift"]     # Win+Shift：长按语音修复
+# trigger = ["Meta", "Alt"]       # Win+Alt：长按录音，短按确认
+# repair  = ["Control", "Alt"]    # Ctrl+Alt：长按语音修复
+# command = ["Meta", "Shift"]     # Win+Shift：长按电脑控制（语音指令）
 # cancel  = ["Escape"]            # Esc：清空暂存条
 
 # ── 自定义示例：macOS 用左 ⌘ + Space 作为输入键 ──

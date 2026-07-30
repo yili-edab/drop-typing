@@ -262,15 +262,15 @@ impl Bindings {
         }
     }
 
-    /// Windows 默认：三个 Win 组合键
+    /// Windows 默认：Alt/Win 双修饰组合（避开微信语音输入的 Ctrl+Win 等占用）
     pub fn windows_default() -> Self {
         Self {
             trigger: vec![
-                KeySpec::Family(ModFamily::Control),
                 KeySpec::Family(ModFamily::Meta),
+                KeySpec::Family(ModFamily::Alt),
             ],
             repair: vec![
-                KeySpec::Family(ModFamily::Meta),
+                KeySpec::Family(ModFamily::Control),
                 KeySpec::Family(ModFamily::Alt),
             ],
             command: vec![

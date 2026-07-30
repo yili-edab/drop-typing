@@ -146,10 +146,12 @@ drop-typing/
 │   │   ├── audio/recorder.rs    # cpal 录音 → 流式 PCM chunk / 整段 WAV
 │   │   ├── hotkey/              # 热键抽象：trait HotkeySource（平台相关）
 │   │   │   ├── mod.rs
-│   │   │   └── macos.rs         #   rdev 全局监听 + 辅助功能权限检测
+│   │   │   ├── macos.rs         #   rdev 全局监听 + 辅助功能权限检测
+│   │   │   └── windows.rs       #   rdev 低级键盘钩子（WH_KEYBOARD_LL），修饰键组合检测
 │   │   └── inject/              # 注入抽象：trait Injector（平台相关）
 │   │       ├── mod.rs
-│   │       └── macos.rs         #   arboard 剪贴板 + enigo 模拟 Cmd+V
+│   │       ├── macos.rs         #   arboard 剪贴板 + enigo 模拟 Cmd+V
+│   │       └── windows.rs       #   剪贴板 + 模拟 Ctrl+V
 │   ├── examples/test_asr.rs     # ASR 独立手动测试入口
 │   ├── examples/test_llm.rs     # LLM 清洗独立手动测试入口
 │   └── tauri.conf.json / capabilities/ / Info.plist
@@ -157,7 +159,7 @@ drop-typing/
 └── PRD.md
 ```
 
-平台相关代码集中在 `hotkey/` 与 `inject/` 的 trait 后面，Windows 移植（PRD：Right Win / Right Alt / Right Shift + Ctrl+V）只需各加一个实现文件。
+平台相关代码集中在 `hotkey/` 与 `inject/` 的 trait 后面。Windows 已实现：热键为 rdev 低级键盘钩子（默认 Win+Alt 录入 / Ctrl+Alt 修复 / Win+Shift 电脑控制，已避开微信语音输入的 Ctrl+Win），文字注入为剪贴板 + 模拟 Ctrl+V。
 
 ## 热键方案决策
 
