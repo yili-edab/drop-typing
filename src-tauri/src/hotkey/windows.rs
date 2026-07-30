@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use anyhow::Result;
 use rdev::{EventType, Key};
 
-use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, ModFamily};
+use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, ModFamily, MOUSE_DOUBLE_CLICK_MS};
 
 // ── 内部组合定义（由 Bindings 转换而来）───────────────────────────
 
@@ -125,6 +125,8 @@ impl HotkeySource for WindowsHotkey {
                     (false, false, false, false);
                 // 当前激活的组合在 combos 中的索引
                 let mut active_idx: Option<usize> = None;
+                // 鼠标左键双击检测：记录上一次左键按下时间
+                let mut last_left_press: Option<std::time::Instant> = None;
 
                 let result = rdev::listen(move |event| {
                     match event.event_type {
@@ -202,7 +204,22 @@ impl HotkeySource for WindowsHotkey {
                             // 非修饰键释放 → 忽略
                         }
 
-                        _ => {} // 鼠标事件忽略
+                        // ── 鼠标左键双击（确认/消除错误）──
+                        EventType::ButtonPress(rdev::Button::Left) => {
+                            let now = std::time::Instant::now();
+                            let prev = last_left_press.replace(now);
+                            if let Some(t) = prev {
+                                // 双击判定：触发后重置计时，避免三击连发
+                                if now.duration_since(t).as_millis()
+                                    < MOUSE_DOUBLE_CLICK_MS as u128
+                                {
+                                    last_left_press = None;
+                                    let _ = tx.send(HotkeyEvent::MouseDoubleClick);
+                                }
+                            }
+                        }
+
+                        _ => {} // 其它鼠标事件忽略
                     }
                 });
                 if let Err(e) = result {

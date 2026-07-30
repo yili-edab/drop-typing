@@ -37,9 +37,15 @@ pub enum HotkeyEvent {
     OtherKeyDown,
     /// Esc 按下：清空暂存条并隐藏
     CancelDown,
+    /// 鼠标左键双击：异常态下仅消除错误；暂存条有内容时提交到光标处
+    MouseDoubleClick,
     /// 监听器运行时错误（如权限被收回）
     Error(String),
 }
+
+/// 鼠标左键双击判定窗口（毫秒），参考 OS 双击间隔；
+/// 独立于键盘双击窗口 `double_press_window_ms`
+pub(crate) const MOUSE_DOUBLE_CLICK_MS: u64 = 500;
 
 // ── 快捷键配置类型 ────────────────────────────────────────────────
 

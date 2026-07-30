@@ -59,6 +59,8 @@ enum State {
         mode: RecordMode,
         /// 暂存条是否已显示（按下后等阈值到期才 show，避免短按一闪而过）
         bar_shown: bool,
+        /// 按下时暂存条正处于异常态：本次短按仅消除错误，不提交
+        dismiss_only: bool,
         /// 若本次录音是从 PendingCommit 触发的，携带第一击时间用于双击判定
         pending_since: Option<Instant>,
         /// 实时后端的活动会话（批量后端为 None）
@@ -207,6 +209,37 @@ fn run_loop(
                 state = State::Idle;
             }
 
+            HotkeyEvent::MouseDoubleClick => {
+                // 录音进行中：忽略，不打断
+                if matches!(state, State::Recording { .. }) {
+                    continue;
+                }
+                // 异常态：任一确认行为第一次仅消除错误（与确认键语义一致），
+                // 不提交、不清文本；无内容时顺带隐藏窗口
+                if staging.has_error() {
+                    staging.clear_error();
+                    if staging.text().trim().is_empty() {
+                        staging.hide();
+                    }
+                    state = State::Idle;
+                    continue;
+                }
+                // 暂存条无内容：零副作用
+                if staging.text().trim().is_empty() {
+                    continue;
+                }
+                state = State::Idle; // 取消 PendingCommit 待定
+                // 取消尚未执行的指令倒计时，防止粘贴后倒计时按键打进输入框
+                command_gen.fetch_add(1, Ordering::SeqCst);
+                // 双击会在目标输入框选中一个单词，先按 → 折叠选区，
+                // 避免粘贴把被选词替换掉
+                let _ = injector.simulate_combo(&command::KeyCombo {
+                    modifiers: vec![],
+                    key: "RIGHT".to_string(),
+                });
+                commit(&staging, injector.as_ref());
+            }
+
             HotkeyEvent::OtherKeyDown => {
                 if let State::Recording { tainted, .. } = &mut state {
                     *tainted = true;
@@ -240,6 +273,10 @@ fn run_loop(
 
                 // 任何新录音开始都取消尚未执行的指令倒计时
                 command_gen.fetch_add(1, Ordering::SeqCst);
+                // 异常态下按确认键（录入通道）：标记本次按下仅用于消除错误
+                // （须在 clear_error 之前判定）
+                let dismiss_only =
+                    matches!(ev, HotkeyEvent::TriggerDown) && staging.has_error();
                 staging.clear_error();
                 staging.partial("");
                 staging.set_repair_note(""); // 清除上次修正的修复意见
@@ -321,6 +358,7 @@ fn run_loop(
                     tainted: false,
                     mode,
                     bar_shown: false,
+                    dismiss_only,
                     pending_since: carry_pending,
                     session,
                     pending_rx,
@@ -333,6 +371,7 @@ fn run_loop(
                     tainted,
                     mode,
                     bar_shown: _,
+                    dismiss_only,
                     pending_since,
                     session,
                     pending_rx,
@@ -373,6 +412,15 @@ fn run_loop(
                     staging.set_status("");
                     match mode {
                         RecordMode::Input => {
+                            if dismiss_only {
+                                // 按下时处于异常态：短按仅消除错误，不提交、不清文本；
+                                // 无内容时顺带隐藏窗口
+                                staging.clear_error();
+                                if staging.text().trim().is_empty() {
+                                    staging.hide();
+                                }
+                                continue;
+                            }
                             let text = staging.text();
                             if text.trim().is_empty() {
                                 // 暂存条为空，直接隐藏

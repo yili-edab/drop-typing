@@ -238,6 +238,11 @@ impl Staging {
             .emit("drop-typing://partial", serde_json::json!({ "text": text }));
     }
 
+    /// 当前是否处于异常态（黄底红字显示中）
+    pub fn has_error(&self) -> bool {
+        self.last_error.lock().unwrap().is_some()
+    }
+
     /// 清除异常态（开始新一次录音时调用）
     pub fn clear_error(&self) {
         *self.last_error.lock().unwrap() = None;

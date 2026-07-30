@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use anyhow::Result;
 use rdev::{EventType, Key};
 
-use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec};
+use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, MOUSE_DOUBLE_CLICK_MS};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -34,6 +34,8 @@ impl HotkeySource for RdevHotkey {
         std::thread::Builder::new()
             .name("drop-typing-hotkey".into())
             .spawn(move || {
+                // 鼠标左键双击检测：记录上一次左键按下时间
+                let mut last_left_press: Option<std::time::Instant> = None;
                 let result = rdev::listen(move |event| {
                     let ev = match event.event_type {
                         EventType::KeyPress(ref key) => {
@@ -59,6 +61,21 @@ impl HotkeySource for RdevHotkey {
                                 Some(HotkeyEvent::CommandUp)
                             } else {
                                 None
+                            }
+                        }
+                        EventType::ButtonPress(rdev::Button::Left) => {
+                            let now = std::time::Instant::now();
+                            let prev = last_left_press.replace(now);
+                            match prev {
+                                // 双击判定：触发后重置计时，避免三击连发
+                                Some(t)
+                                    if now.duration_since(t).as_millis()
+                                        < MOUSE_DOUBLE_CLICK_MS as u128 =>
+                                {
+                                    last_left_press = None;
+                                    Some(HotkeyEvent::MouseDoubleClick)
+                                }
+                                _ => None,
                             }
                         }
                         _ => None,

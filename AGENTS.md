@@ -92,6 +92,7 @@ src-tauri/
 - **rdev 是 vendored 补丁**：`Cargo.toml` 中 `[patch.crates-io] rdev = { path = "vendor/rdev" }`，移除了 CGEventTap 后台线程中对 TIS/TSM 输入法 API 的调用（macOS 26 主线程断言导致 EXC_BREAKPOINT）。`cargo update` 时 rdev 被锁定在 0.5.3；上游修复前**不要移除该 patch**
 - `tauri.conf.json` 开启了 `macOSPrivateApi`（透明/置顶窗口需要）；CSP 为 `null`；窗口名为 `staging`，权限见 `capabilities/default.json`（仅 `core:default` + `core:event:default`）
 - 提交（短按）流程：暂存条 → 剪贴板 → 模拟 Cmd+V → **恢复原剪贴板** → 清空暂存条。注意剪贴板只按纯文本保存/恢复（M1 已知限制）
+- **确认行为有三种，语义统一**：录入通道短按（macOS 右 ⌘ / Windows Win+Alt）、鼠标左键双击（rdev 监听 `ButtonPress(Left)`，500ms 窗口 `MOUSE_DOUBLE_CLICK_MS`，提交到鼠标所在输入框——双击已把焦点带过去；提交前先模拟一次 → 方向键折叠双击产生的选词，避免替换被选词）。**异常态（黄底红字）下任一确认行为第一次仅消除错误**（`Recording.dismiss_only` / `staging.has_error()` 判定），不提交、不清文本，无内容时顺带隐藏窗口
 - **暂存条默认隐藏**（`lib.rs` 窗口 `.visible(false)`）：按下右 ⌘ 才显示——定位回退链：光标/聚焦元素（`caret.rs` AX 查询，可视条左上角对齐光标底边，注意扣除前端 #bar 的 6px CSS margin）→ 聚焦窗口内底部居中 → 屏幕底部居中；短按提交 / 录音作废时隐藏，**不做超时自动隐藏**；**`staging.error()` 会顺带显示窗口**（启动诊断依赖这条链路）且错误常显
 - **`caret.rs` 查询前会给聚焦应用设置 `AXEnhancedUserInterface`**（Electron 应用如 VSCode 需要，否则拿不到文本范围）；AX 返回的矩形要做有效性检查（高度为 0 视为垃圾值）
 - **AX 符号手写 extern 声明**（`#[link(name = "ApplicationServices")]`，见 `hotkey/macos.rs` / `caret.rs`），不要为此引入 accessibility crate
