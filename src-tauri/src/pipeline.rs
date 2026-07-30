@@ -67,6 +67,8 @@ enum State {
         session: Option<Arc<dyn RealtimeSession>>,
         /// 后台建连中：会话尚未就绪时暂存 Receiver，松手时取回
         pending_rx: Option<mpsc::Receiver<anyhow::Result<Arc<dyn RealtimeSession>>>>,
+        /// 录音是否由鼠标侧键启动（用于跨设备 taint 判定）
+        started_by_mouse: bool,
     },
     /// 输入通道短按后等待判定：超时则单击提交，窗口内再次短按则双击清空
     PendingCommit { since: Instant },
@@ -241,17 +243,25 @@ fn run_loop(
             }
 
             HotkeyEvent::OtherKeyDown => {
-                if let State::Recording { tainted, .. } = &mut state {
-                    *tainted = true;
+                // 仅键盘录音期间其它键按下才 taint；鼠标录音不受键盘干扰
+                if let State::Recording { tainted, started_by_mouse, .. } = &mut state {
+                    if !*started_by_mouse {
+                        *tainted = true;
+                    }
                 }
             }
 
             HotkeyEvent::TriggerDown | HotkeyEvent::RepairDown | HotkeyEvent::CommandDown => {
                 // 若在 PendingCommit 状态 → 提取第一击时间，进入录音；
-                // 若已在录音中 → 另一个修饰键按下，taint
+                // 若已在录音中 → 根据来源决定行为
                 let carry_pending = match &state {
                     State::PendingCommit { since } => Some(*since),
-                    State::Recording { .. } => {
+                    State::Recording { started_by_mouse, .. } => {
+                        // 键盘事件到达鼠标录音 → 忽略，不 taint
+                        if *started_by_mouse {
+                            continue;
+                        }
+                        // 键盘事件到达键盘录音 → taint（同一设备二次按下）
                         if let State::Recording { tainted, .. } = &mut state {
                             *tainted = true;
                         }
@@ -362,7 +372,280 @@ fn run_loop(
                     pending_since: carry_pending,
                     session,
                     pending_rx,
+                    started_by_mouse: false,  // 键盘启动
                 };
+            }
+
+            HotkeyEvent::MouseTriggerDown | HotkeyEvent::MouseRepairDown => {
+                    // 鼠标侧键事件。若已在键盘录音中 → 忽略，不 taint
+                    let carry_pending = match &state {
+                        State::PendingCommit { since } => Some(*since),
+                        State::Recording { started_by_mouse, .. } => {
+                            if !*started_by_mouse {
+                                // 鼠标事件到达键盘录音 → 忽略
+                                continue;
+                            }
+                            // 鼠标事件到达鼠标录音 → taint（同一设备二次按下）
+                            if let State::Recording { tainted, .. } = &mut state {
+                                *tainted = true;
+                            }
+                            continue;
+                        }
+                        State::Idle => None,
+                    };
+
+                    // 鼠标不支持 command 通道，RepairDown → RecordMode::Repair，
+                    // TriggerDown → RecordMode::Input
+                    let mode = if matches!(ev, HotkeyEvent::MouseRepairDown) {
+                        RecordMode::Repair
+                    } else {
+                        RecordMode::Input
+                    };
+
+                    let Some(r) = &recorder else {
+                        staging.error("录音器不可用（麦克风初始化失败）");
+                        continue;
+                    };
+
+                    command_gen.fetch_add(1, Ordering::SeqCst);
+                    let dismiss_only =
+                        matches!(ev, HotkeyEvent::MouseTriggerDown) && staging.has_error();
+                    staging.clear_error();
+                    staging.partial("");
+                    staging.set_repair_note("");
+                    staging.clear_command();
+
+                    let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
+                    let session = None;
+                    let mut pending_rx = None;
+
+                    if let Some(b) = &backend {
+                        if let AsrBackend::Realtime(p) = b.as_ref() {
+                            let (ptx, prx) = mpsc::channel::<String>();
+                            let st = staging.clone();
+                            std::thread::spawn(move || {
+                                for text in prx {
+                                    match mode {
+                                        RecordMode::Input | RecordMode::Command => st.partial(&text),
+                                        RecordMode::Repair => st.set_repair_note(&text),
+                                    }
+                                }
+                            });
+
+                            let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
+                            std::thread::spawn(move || {
+                                let mut buf: Vec<Vec<u8>> = Vec::new();
+                                let mut sess: Option<Arc<dyn RealtimeSession>> = None;
+                                loop {
+                                    if sess.is_none() {
+                                        if let Ok(s) = fwd_rx.try_recv() {
+                                            for chunk in buf.drain(..) {
+                                                if s.send_audio(&chunk).is_err() {
+                                                    return;
+                                                }
+                                            }
+                                            sess = Some(s);
+                                        }
+                                    }
+                                    match pcm_rx.recv() {
+                                        Ok(chunk) => {
+                                            if let Some(ref s) = sess {
+                                                if s.send_audio(&chunk).is_err() {
+                                                    return;
+                                                }
+                                            } else {
+                                                buf.push(chunk);
+                                            }
+                                        }
+                                        Err(_) => return,
+                                    }
+                                }
+                            });
+
+                            let p = Arc::clone(p);
+                            let (sess_tx, sess_rx) = mpsc::channel();
+                            std::thread::spawn(move || {
+                                let result: anyhow::Result<Arc<dyn RealtimeSession>> =
+                                    p.start_session(ptx).map(|s| Arc::from(s));
+                                if let Ok(ref s) = result {
+                                    let _ = fwd_tx.send(s.clone());
+                                }
+                                let _ = sess_tx.send(result);
+                            });
+                            pending_rx = Some(sess_rx);
+                        }
+                    }
+
+                    if let Err(e) = r.start(Some(pcm_tx)) {
+                        staging.error(&format!("录音启动失败：{e}"));
+                        continue;
+                    }
+                    staging.set_recording(true);
+                    state = State::Recording {
+                        started: Instant::now(),
+                        tainted: false,
+                        mode,
+                        bar_shown: false,
+                        dismiss_only,
+                        pending_since: carry_pending,
+                        session,
+                        pending_rx,
+                        started_by_mouse: true,  // 鼠标启动
+                    };
+                }
+
+                HotkeyEvent::MouseTriggerUp | HotkeyEvent::MouseRepairUp => {
+                // 鼠标侧键松开：与键盘松开处理逻辑相同（长按 → ASR，短按 → 提交/忽略）
+                let State::Recording {
+                    started,
+                    tainted,
+                    mode,
+                    bar_shown: _,
+                    dismiss_only,
+                    pending_since,
+                    session,
+                    pending_rx,
+                    started_by_mouse: _,
+                } = state
+                else {
+                    continue;
+                };
+                state = State::Idle;
+                staging.set_recording(false);
+
+                let Some(r) = &recorder else { continue };
+                let duration = started.elapsed();
+
+                let mut session = session;
+                let mut session_err: Option<String> = None;
+                if duration >= threshold {
+                    if let Some(rx) = pending_rx {
+                        match rx.try_recv() {
+                            Ok(Ok(s)) => session = Some(s),
+                            Ok(Err(e)) => session_err = Some(format!("{e:#}")),
+                            Err(_) => session_err = Some("ASR 会话建立超时".into()),
+                        }
+                    }
+                } else {
+                    drop(pending_rx);
+                }
+
+                if tainted {
+                    r.discard();
+                    staging.set_status("");
+                    staging.set_repair_note("");
+                    staging.hide();
+                } else if duration < threshold {
+                    r.discard();
+                    staging.set_status("");
+                    match mode {
+                        RecordMode::Input => {
+                            if dismiss_only {
+                                staging.clear_error();
+                                if staging.text().trim().is_empty() {
+                                    staging.hide();
+                                }
+                                continue;
+                            }
+                            let text = staging.text();
+                            if text.trim().is_empty() {
+                                staging.hide();
+                            } else if let Some(since) = pending_since {
+                                if since.elapsed() < double_press {
+                                    staging.take();
+                                } else {
+                                    state = State::PendingCommit { since: Instant::now() };
+                                }
+                            } else {
+                                state = State::PendingCommit { since: Instant::now() };
+                            }
+                        }
+                        RecordMode::Repair | RecordMode::Command => {
+                            staging.set_repair_note("");
+                            staging.hide();
+                        }
+                    }
+                } else {
+                    // 长按：与键盘逻辑完全相同
+                    match (&backend, session) {
+                        (Some(b), Some(s)) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
+                            r.discard();
+                            staging.set_busy(true);
+                            staging.set_status(mode.recognizing_label());
+                            let result = s.finish();
+                            staging.set_busy(false);
+                            match result {
+                                Ok(text) if !text.trim().is_empty() => {
+                                    match mode {
+                                        RecordMode::Input => {
+                                            let pc = prompts::load_prompts();
+                                            let prompt = {
+                                                let style = current_style.lock().unwrap().clone();
+                                                prompts::effective_clean_prompt(&pc, style.as_deref())
+                                            };
+                                            clean_and_append(&staging, &cleaner, text.trim(), &prompt)
+                                        }
+                                        RecordMode::Repair => {
+                                            repair_and_replace(&staging, &cleaner, text.trim())
+                                        }
+                                        RecordMode::Command => run_command(
+                                            &staging,
+                                            &injector,
+                                            text.trim(),
+                                            command_countdown,
+                                            &command_gen,
+                                            &lexicon,
+                                        ),
+                                    }
+                                }
+                                Ok(_) => {
+                                    staging.set_status("");
+                                    staging.error("ASR 返回空文本")
+                                }
+                                Err(e) => {
+                                    staging.set_status("");
+                                    staging.error(&format!("ASR 失败：{e}"))
+                                }
+                            }
+                        }
+                        (Some(b), None) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
+                            r.discard();
+                            staging.set_status("");
+                            if let Some(e) = session_err {
+                                staging.error(&format!("ASR 会话建立失败：{e}"));
+                            } else {
+                                staging.error("ASR 会话未建立");
+                            }
+                        }
+                        (Some(b), _) => {
+                            let AsrBackend::Batch(p) = b.as_ref() else {
+                                unreachable!()
+                            };
+                            match r.stop() {
+                                Ok(wav) => {
+                                    let pc = prompts::load_prompts();
+                                    let prompt = {
+                                        let style = current_style.lock().unwrap().clone();
+                                        prompts::effective_clean_prompt(&pc, style.as_deref())
+                                    };
+                                    spawn_transcribe(
+                                    &staging, p.clone(), &cleaner, mode, wav,
+                                    &injector, command_countdown, &command_gen, lexicon.clone(),
+                                    prompt,
+                                )}
+                                Err(e) => {
+                                    staging.set_status("");
+                                    staging.error(&format!("录音失败：{e}"))
+                                }
+                            }
+                        }
+                        (None, _) => {
+                            r.discard();
+                            staging.set_status("");
+                            staging.error("未配置 ASR API Key，无法转写。");
+                        }
+                    }
+                }
             }
 
             HotkeyEvent::TriggerUp | HotkeyEvent::RepairUp | HotkeyEvent::CommandUp => {
@@ -375,6 +658,7 @@ fn run_loop(
                     pending_since,
                     session,
                     pending_rx,
+                    started_by_mouse: _,
                 } = state
                 else {
                     continue;

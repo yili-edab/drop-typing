@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::command::Modifier;
-use crate::hotkey::{Bindings, KeySpec};
+use crate::hotkey::{Bindings, KeySpec, MouseBindings};
 
 fn default_asr_provider() -> String {
     "bailian".to_string()
@@ -192,16 +192,17 @@ pub struct HotkeyRawConfig {
 }
 
 impl HotkeyRawConfig {
-    /// 将原始字符串列表解析为 `Bindings`。
+    /// 将原始字符串列表解析为键盘 `Bindings` 部分。
     ///
     /// 未配置的通道回退为平台默认值；解析失败的按键名会以 Err 报告。
-    pub fn into_bindings(self) -> Result<Bindings, String> {
+    pub fn into_keyboard_bindings(self) -> Result<Bindings, String> {
         let defaults = Bindings::platform_default();
         Ok(Bindings {
             trigger: parse_or_default(self.trigger, &defaults.trigger)?,
             repair: parse_or_default(self.repair, &defaults.repair)?,
             command: parse_or_default(self.command, &defaults.command)?,
             cancel: parse_or_default(self.cancel, &defaults.cancel)?,
+            mouse: MouseBindings::default(),
         })
     }
 }
@@ -218,6 +219,102 @@ fn parse_or_default(
     }
 }
 
+// ── 鼠标侧键配置类型 ──────────────────────────────────────────────
+
+/// 鼠标按键（用户配置中的 `"forward"` / `"back"`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseButton {
+    /// 前进键（X2 / Button 5）
+    Forward,
+    /// 后退键（X1 / Button 4）
+    Back,
+}
+
+/// 鼠标侧键绑定配置（`[hotkey.mouse]` 段）。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct MouseHotkeyConfig {
+    /// 输入/提交通道（前进键，长按录音、短按提交）
+    #[serde(default)]
+    pub trigger: Option<MouseButton>,
+    /// 修正通道（后退键，长按说修正指令）
+    #[serde(default)]
+    pub repair: Option<MouseButton>,
+}
+
+impl MouseHotkeyConfig {
+    /// 转换为 `MouseBindings`。
+    pub fn into_mouse_bindings(self) -> Result<MouseBindings, String> {
+        use crate::hotkey::MouseButton as HkMouseButton;
+        Ok(MouseBindings {
+            trigger: self.trigger.map(|b| match b {
+                MouseButton::Forward => HkMouseButton::Forward,
+                MouseButton::Back => HkMouseButton::Back,
+            }),
+            repair: self.repair.map(|b| match b {
+                MouseButton::Forward => HkMouseButton::Forward,
+                MouseButton::Back => HkMouseButton::Back,
+            }),
+        })
+    }
+}
+
+// ── 热键总配置（[hotkey]）────────────────────────────────────────
+
+/// 热键总配置。
+///
+/// Keyboard 字段经 `#[serde(flatten)]` 散布在 `[hotkey]` 顶层
+/// （与旧版配置格式完全兼容）；`[hotkey.mouse]` 是可选子表。
+///
+/// 示例：
+/// ```toml
+/// [hotkey]
+/// trigger = ["MetaRight"]
+/// repair  = ["AltGr"]
+/// command = ["ShiftRight"]
+/// cancel  = ["Escape"]
+///
+/// [hotkey.mouse]
+/// trigger = "forward"
+/// repair  = "back"
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HotkeyConfig {
+    /// 键盘快捷键（flatten 到 `[hotkey]` 顶层）
+    #[serde(flatten)]
+    pub keyboard: HotkeyRawConfig,
+    /// 鼠标侧键（`[hotkey.mouse]`，缺省不绑）
+    #[serde(default)]
+    pub mouse: Option<MouseHotkeyConfig>,
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            keyboard: HotkeyRawConfig::default(),
+            mouse: None,
+        }
+    }
+}
+
+impl HotkeyConfig {
+    /// 将热键配置解析为运行时 `Bindings`。
+    pub fn into_bindings(self) -> Result<Bindings, String> {
+        let keyboard = self.keyboard.into_keyboard_bindings()?;
+        let mouse = match self.mouse {
+            Some(m) => m.into_mouse_bindings()?,
+            None => MouseBindings::default(),
+        };
+        Ok(Bindings {
+            trigger: keyboard.trigger,
+            repair: keyboard.repair,
+            command: keyboard.command,
+            cancel: keyboard.cancel,
+            mouse,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
@@ -229,7 +326,7 @@ pub struct Config {
     pub command: CommandConfig,
     /// 快捷键配置（缺省使用平台默认值）
     #[serde(default)]
-    pub hotkey: HotkeyRawConfig,
+    pub hotkey: HotkeyConfig,
     /// 旧版（M1）顶层 Key，向后兼容
     #[serde(default)]
     pub dashscope_api_key: Option<String>,
@@ -258,7 +355,7 @@ impl Default for Config {
             double_press_window_ms: default_double_press_window(),
             command_countdown_ms: default_command_countdown(),
             command: CommandConfig::default(),
-            hotkey: HotkeyRawConfig::default(),
+            hotkey: HotkeyConfig::default(),
         }
     }
 }
@@ -341,11 +438,12 @@ impl Config {
     /// 解析失败时打印警告并回退为平台默认值。
     pub fn hotkey_bindings(&self) -> Bindings {
         let defaults = Bindings::platform_default();
-        if self.hotkey.trigger.is_none()
-            && self.hotkey.repair.is_none()
-            && self.hotkey.command.is_none()
-            && self.hotkey.cancel.is_none()
-        {
+        let has_keyboard = self.hotkey.keyboard.trigger.is_some()
+            || self.hotkey.keyboard.repair.is_some()
+            || self.hotkey.keyboard.command.is_some()
+            || self.hotkey.keyboard.cancel.is_some();
+        let has_mouse = self.hotkey.mouse.is_some();
+        if !has_keyboard && !has_mouse {
             return defaults;
         }
         match self.hotkey.clone().into_bindings() {

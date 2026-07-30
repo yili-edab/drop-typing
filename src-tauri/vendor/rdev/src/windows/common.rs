@@ -68,11 +68,22 @@ pub unsafe fn convert(param: WPARAM, lpdata: LPARAM) -> Option<EventType> {
         Ok(WM_RBUTTONUP) => Some(EventType::ButtonRelease(Button::Right)),
         Ok(WM_XBUTTONDOWN) => {
             let code = get_button_code(lpdata) as u8;
-            Some(EventType::ButtonPress(Button::Unknown(code)))
+            // XBUTTON1 (1) = 后退键, XBUTTON2 (2) = 前进键
+            let btn = match code {
+                1 => Button::Back,
+                2 => Button::Forward,
+                _ => Button::Unknown(code),
+            };
+            Some(EventType::ButtonPress(btn))
         }
         Ok(WM_XBUTTONUP) => {
             let code = get_button_code(lpdata) as u8;
-            Some(EventType::ButtonRelease(Button::Unknown(code)))
+            let btn = match code {
+                1 => Button::Back,
+                2 => Button::Forward,
+                _ => Button::Unknown(code),
+            };
+            Some(EventType::ButtonRelease(btn))
         }
         Ok(WM_MOUSEMOVE) => {
             let (x, y) = get_point(lpdata);

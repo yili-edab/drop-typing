@@ -43,6 +43,9 @@ pub fn convert_event(code: c_uchar, type_: c_int, x: f64, y: f64) -> Option<Even
                 delta_y: 0,
                 delta_x: 1,
             }),
+            // X11 侧键编号：8 = 后退, 9 = 前进
+            8 => Some(EventType::ButtonPress(Button::Back)),
+            9 => Some(EventType::ButtonPress(Button::Forward)),
             code => Some(EventType::ButtonPress(Button::Unknown(code))),
         },
         xlib::ButtonRelease => match code {
@@ -50,6 +53,8 @@ pub fn convert_event(code: c_uchar, type_: c_int, x: f64, y: f64) -> Option<Even
             2 => Some(EventType::ButtonRelease(Button::Middle)),
             3 => Some(EventType::ButtonRelease(Button::Right)),
             4 | 5 => None,
+            8 => Some(EventType::ButtonRelease(Button::Back)),
+            9 => Some(EventType::ButtonRelease(Button::Forward)),
             _ => Some(EventType::ButtonRelease(Button::Unknown(code))),
         },
         xlib::MotionNotify => Some(EventType::MouseMove { x, y }),

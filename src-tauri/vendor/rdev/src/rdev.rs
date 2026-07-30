@@ -220,6 +220,10 @@ pub enum Button {
     Left,
     Right,
     Middle,
+    /// 后退键（X1 / Button 4）
+    Back,
+    /// 前进键（X2 / Button 5）
+    Forward,
     Unknown(u8),
 }
 

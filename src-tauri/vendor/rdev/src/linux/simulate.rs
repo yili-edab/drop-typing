@@ -21,6 +21,9 @@ unsafe fn send_native(event_type: &EventType, display: *mut xlib::Display) -> Op
             Button::Left => xtest::XTestFakeButtonEvent(display, 1, TRUE, 0),
             Button::Middle => xtest::XTestFakeButtonEvent(display, 2, TRUE, 0),
             Button::Right => xtest::XTestFakeButtonEvent(display, 3, TRUE, 0),
+            // X11 侧键编号：8 = 后退, 9 = 前进
+            Button::Back => xtest::XTestFakeButtonEvent(display, 8, TRUE, 0),
+            Button::Forward => xtest::XTestFakeButtonEvent(display, 9, TRUE, 0),
             Button::Unknown(code) => {
                 xtest::XTestFakeButtonEvent(display, (*code).try_into().ok()?, TRUE, 0)
             }
@@ -29,6 +32,8 @@ unsafe fn send_native(event_type: &EventType, display: *mut xlib::Display) -> Op
             Button::Left => xtest::XTestFakeButtonEvent(display, 1, FALSE, 0),
             Button::Middle => xtest::XTestFakeButtonEvent(display, 2, FALSE, 0),
             Button::Right => xtest::XTestFakeButtonEvent(display, 3, FALSE, 0),
+            Button::Back => xtest::XTestFakeButtonEvent(display, 8, FALSE, 0),
+            Button::Forward => xtest::XTestFakeButtonEvent(display, 9, FALSE, 0),
             Button::Unknown(code) => {
                 xtest::XTestFakeButtonEvent(display, (*code).try_into().ok()?, FALSE, 0)
             }

@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use anyhow::Result;
 use rdev::{EventType, Key};
 
-use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, ModFamily, MOUSE_DOUBLE_CLICK_MS};
+use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, ModFamily, MouseButton, MOUSE_DOUBLE_CLICK_MS};
 
 // ── 内部组合定义（由 Bindings 转换而来）───────────────────────────
 
@@ -71,6 +71,11 @@ fn combo_matches(def: &ComboDef, ctrl: bool, win: bool, alt: bool, shift: bool) 
         && (!def.win || win)
         && (!def.alt || alt)
         && (!def.shift || shift)
+}
+
+/// 检查鼠标按键是否匹配某个侧键配置
+fn mouse_matches(btn: MouseButton, binding: &Option<MouseButton>) -> bool {
+    binding.map_or(false, |b| b == btn)
 }
 
 /// 修饰键家族是否已被某个组合占用（在组合激活期间，按下"不属于"该组的修饰键应 taint）
@@ -216,6 +221,28 @@ impl HotkeySource for WindowsHotkey {
                                     last_left_press = None;
                                     let _ = tx.send(HotkeyEvent::MouseDoubleClick);
                                 }
+                            }
+                        }
+
+                        // ── 鼠标侧键：绕过组合状态机，直接触发 ──
+                        EventType::ButtonPress(rdev::Button::Forward) => {
+                            if mouse_matches(MouseButton::Forward, &bindings.mouse.trigger) {
+                                let _ = tx.send(HotkeyEvent::MouseTriggerDown);
+                            }
+                        }
+                        EventType::ButtonRelease(rdev::Button::Forward) => {
+                            if mouse_matches(MouseButton::Forward, &bindings.mouse.trigger) {
+                                let _ = tx.send(HotkeyEvent::MouseTriggerUp);
+                            }
+                        }
+                        EventType::ButtonPress(rdev::Button::Back) => {
+                            if mouse_matches(MouseButton::Back, &bindings.mouse.repair) {
+                                let _ = tx.send(HotkeyEvent::MouseRepairDown);
+                            }
+                        }
+                        EventType::ButtonRelease(rdev::Button::Back) => {
+                            if mouse_matches(MouseButton::Back, &bindings.mouse.repair) {
+                                let _ = tx.send(HotkeyEvent::MouseRepairUp);
                             }
                         }
 

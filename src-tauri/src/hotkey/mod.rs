@@ -39,6 +39,14 @@ pub enum HotkeyEvent {
     CancelDown,
     /// 鼠标左键双击：异常态下仅消除错误；暂存条有内容时提交到光标处
     MouseDoubleClick,
+    /// 鼠标侧键：输入/提交通道按下（前进键）
+    MouseTriggerDown,
+    /// 鼠标侧键：输入/提交通道松开
+    MouseTriggerUp,
+    /// 鼠标侧键：修正通道按下（后退键）
+    MouseRepairDown,
+    /// 鼠标侧键：修正通道松开
+    MouseRepairUp,
     /// 监听器运行时错误（如权限被收回）
     Error(String),
 }
@@ -247,6 +255,28 @@ pub struct Bindings {
     pub command: Vec<KeySpec>,
     /// 清空暂存条
     pub cancel: Vec<KeySpec>,
+    /// 鼠标侧键（缺省不绑）
+    pub mouse: MouseBindings,
+}
+
+// ── 鼠标侧键类型 ──────────────────────────────────────────────────
+
+/// 鼠标侧键（用户配置中的 `"forward"` / `"back"`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    /// 前进键（X2 / Button 5）
+    Forward,
+    /// 后退键（X1 / Button 4）
+    Back,
+}
+
+/// 鼠标侧键绑定。
+#[derive(Debug, Clone, Default)]
+pub struct MouseBindings {
+    /// 输入/提交通道（前进键，长按录音、短按提交）
+    pub trigger: Option<MouseButton>,
+    /// 修正通道（后退键，长按说修正指令）
+    pub repair: Option<MouseButton>,
 }
 
 impl Bindings {
@@ -265,6 +295,7 @@ impl Bindings {
             repair: vec![KeySpec::Exact(Key::AltGr)],
             command: vec![KeySpec::Exact(Key::ShiftRight)],
             cancel: vec![KeySpec::Exact(Key::Escape)],
+            mouse: MouseBindings::default(),
         }
     }
 
@@ -284,6 +315,7 @@ impl Bindings {
                 KeySpec::Family(ModFamily::Shift),
             ],
             cancel: vec![KeySpec::Exact(Key::Escape)],
+            mouse: MouseBindings::default(),
         }
     }
 }

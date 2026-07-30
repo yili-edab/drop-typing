@@ -46,6 +46,8 @@ pub const kCGEventMaskForAllEvents: u64 = (1 << CGEventType::LeftMouseDown as u6
     + (1 << CGEventType::LeftMouseUp as u64)
     + (1 << CGEventType::RightMouseDown as u64)
     + (1 << CGEventType::RightMouseUp as u64)
+    + (1 << CGEventType::OtherMouseDown as u64)
+    + (1 << CGEventType::OtherMouseUp as u64)
     + (1 << CGEventType::MouseMoved as u64)
     + (1 << CGEventType::LeftMouseDragged as u64)
     + (1 << CGEventType::RightMouseDragged as u64)
@@ -96,6 +98,25 @@ pub unsafe fn convert(
         CGEventType::LeftMouseUp => Some(EventType::ButtonRelease(Button::Left)),
         CGEventType::RightMouseDown => Some(EventType::ButtonPress(Button::Right)),
         CGEventType::RightMouseUp => Some(EventType::ButtonRelease(Button::Right)),
+        CGEventType::OtherMouseDown => {
+            let button = cg_event.get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER);
+            // macOS 侧键编号：3 = 后退（X1），4 = 前进（X2）
+            let btn = match button {
+                3 => Button::Back,
+                4 => Button::Forward,
+                _ => Button::Unknown(button as u8),
+            };
+            Some(EventType::ButtonPress(btn))
+        }
+        CGEventType::OtherMouseUp => {
+            let button = cg_event.get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER);
+            let btn = match button {
+                3 => Button::Back,
+                4 => Button::Forward,
+                _ => Button::Unknown(button as u8),
+            };
+            Some(EventType::ButtonRelease(btn))
+        }
         CGEventType::MouseMoved => {
             let point = cg_event.location();
             Some(EventType::MouseMove {

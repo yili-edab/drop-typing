@@ -73,6 +73,22 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # cancel 支持任意键名。
 # -----------------------------------------------------------
 
+# ── 鼠标侧键（可选，缺省不绑）──
+# 鼠标侧键与键盘快捷键独立工作，互不干扰。
+# 在 [hotkey] 下正常配置键盘快捷键，再添加 [hotkey.mouse] 段即可启用侧键：
+#
+#   [hotkey]
+#   trigger = ["MetaRight"]
+#   repair  = ["AltGr"]
+#   command = ["ShiftRight"]
+#   cancel  = ["Escape"]
+#
+#   [hotkey.mouse]
+#   trigger = "forward"   # 前进键（X2 / Button 5），长按录音、短按提交
+#   repair  = "back"      # 后退键（X1 / Button 4），长按说修正指令
+#
+# 鼠标段可整体缺省，不写即纯键盘模式。
+
 # ── macOS 默认（单键）──
 # [hotkey]
 # trigger = ["MetaRight"]     # 右 ⌘：长按录音，短按确认

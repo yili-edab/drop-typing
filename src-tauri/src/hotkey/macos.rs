@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use anyhow::Result;
 use rdev::{EventType, Key};
 
-use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, MOUSE_DOUBLE_CLICK_MS};
+use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, MouseButton, MOUSE_DOUBLE_CLICK_MS};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -78,6 +78,37 @@ impl HotkeySource for RdevHotkey {
                                 _ => None,
                             }
                         }
+                        // ── 鼠标侧键：独立于键盘，绕过修饰键状态机 ──
+                        EventType::ButtonPress(rdev::Button::Forward) => {
+                            if mouse_matches_button(MouseButton::Forward, &bindings.mouse.trigger)
+                            {
+                                Some(HotkeyEvent::MouseTriggerDown)
+                            } else {
+                                None
+                            }
+                        }
+                        EventType::ButtonRelease(rdev::Button::Forward) => {
+                            if mouse_matches_button(MouseButton::Forward, &bindings.mouse.trigger)
+                            {
+                                Some(HotkeyEvent::MouseTriggerUp)
+                            } else {
+                                None
+                            }
+                        }
+                        EventType::ButtonPress(rdev::Button::Back) => {
+                            if mouse_matches_button(MouseButton::Back, &bindings.mouse.repair) {
+                                Some(HotkeyEvent::MouseRepairDown)
+                            } else {
+                                None
+                            }
+                        }
+                        EventType::ButtonRelease(rdev::Button::Back) => {
+                            if mouse_matches_button(MouseButton::Back, &bindings.mouse.repair) {
+                                Some(HotkeyEvent::MouseRepairUp)
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     };
                     if let Some(ev) = ev {
@@ -99,4 +130,9 @@ impl HotkeySource for RdevHotkey {
 /// 检查某个键是否匹配任意一个规格
 fn matches_any(key: &Key, specs: &[KeySpec]) -> bool {
     specs.iter().any(|s| s.matches(key))
+}
+
+/// 检查鼠标按键是否匹配某个侧键配置
+fn mouse_matches_button(btn: MouseButton, binding: &Option<MouseButton>) -> bool {
+    binding.map_or(false, |b| b == btn)
 }
