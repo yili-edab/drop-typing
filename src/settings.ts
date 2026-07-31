@@ -13,6 +13,8 @@ import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
 import '@shoelace-style/shoelace/dist/components/input/input.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
+import '@shoelace-style/shoelace/dist/components/select/select.js';
+import '@shoelace-style/shoelace/dist/components/option/option.js';
 import { emit, listen } from '@tauri-apps/api/event';
 
 // ---- DOM ----
@@ -212,6 +214,10 @@ document.querySelectorAll<HTMLElement>('#menu li[data-panel]').forEach(li => {
     li.classList.add('active');
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     document.getElementById(`panel-${id}`)!.classList.add('active');
+    // 懒加载快捷键配置
+    if (id === 'shortcut' && !shortcutState.keyboard.trigger) {
+      requestShortcutConfig();
+    }
   });
 });
 
@@ -416,5 +422,644 @@ listen<{ key: string; optimized?: string; error?: string }>('drop-typing://ai-op
   }
   stopLoading();
 });
+
+// ── 语音唤醒面板 ─────────────────────────────────────────────────────
+
+// DOM
+const wakewordList = document.getElementById('wakeword-list')!;
+const btnAddWakeword = document.getElementById('btn-add-wakeword') as any;
+const btnWakewordSave = document.getElementById('btn-wakeword-save') as any;
+const btnWakewordReset = document.getElementById('btn-wakeword-reset') as any;
+const btnWakewordTokens = document.getElementById('btn-wakeword-tokens') as any;
+const dlgTokens = document.getElementById('dlg-tokens') as any;
+const dlgTokensContent = document.getElementById('dlg-tokens-content')!;
+const dlgTokensClose = document.getElementById('dlg-tokens-close') as any;
+
+// 状态
+interface WakewordEntry {
+  keyword: string;
+  action: string;
+}
+let wakewordEntries: WakewordEntry[] = [];
+let wakewordDefaults: WakewordEntry[] = [];
+let wakewordHasCustom = false;
+
+const ACTION_OPTIONS = [
+  { value: 'input', label: '录入 (Input)' },
+  { value: 'repair', label: '修复 (Repair)' },
+  { value: 'command', label: '指令 (Command)' },
+  { value: 'commit', label: '确认 (Commit)' },
+  { value: 'clear', label: '清空 (Clear)' },
+];
+
+// 渲染唤醒词列表
+function renderWakewordList() {
+  wakewordList.innerHTML = '';
+  wakewordEntries.forEach((entry, idx) => {
+    const row = document.createElement('div');
+    row.className = 'wakeword-row';
+
+    // 关键词输入
+    const input = document.createElement('sl-input');
+    input.className = 'kw-text';
+    input.size = 'small';
+    input.placeholder = '例如 DT打';
+    input.value = entry.keyword;
+    input.addEventListener('sl-input', (e: any) => {
+      wakewordEntries[idx].keyword = e.target.value?.trim() || '';
+    });
+
+    // action 下拉菜单
+    const select = document.createElement('sl-select');
+    select.className = 'kw-action';
+    select.size = 'small';
+    select.value = entry.action;
+    select.addEventListener('sl-change', (e: any) => {
+      wakewordEntries[idx].action = e.target.value;
+    });
+    ACTION_OPTIONS.forEach(opt => {
+      const option = document.createElement('sl-option');
+      option.value = opt.value;
+      option.textContent = opt.label;
+      select.appendChild(option);
+    });
+
+    // 删除按钮
+    const delBtn = document.createElement('sl-button');
+    delBtn.className = 'kw-delete';
+    delBtn.size = 'small';
+    delBtn.variant = 'danger';
+    delBtn.textContent = '删除';
+    delBtn.addEventListener('click', () => {
+      wakewordEntries.splice(idx, 1);
+      renderWakewordList();
+    });
+
+    row.appendChild(input);
+    row.appendChild(select);
+    row.appendChild(delBtn);
+    wakewordList.appendChild(row);
+  });
+}
+
+// 获取当前唤醒词配置
+function requestWakewordConfig() {
+  emit('drop-typing://get-wakeword-config');
+}
+
+// 添加唤醒词
+btnAddWakeword.addEventListener('click', () => {
+  wakewordEntries.push({ keyword: '', action: 'input' });
+  renderWakewordList();
+});
+
+// 保存
+btnWakewordSave.addEventListener('click', () => {
+  btnWakewordSave.textContent = '保存中…';
+  btnWakewordSave.disabled = true;
+  const keywords = wakewordEntries.filter(e => e.keyword.trim());
+  emit('drop-typing://save-wakeword-config', {
+    keywords,
+    enabled: keywords.length > 0,
+  });
+});
+
+// 重置
+btnWakewordReset.addEventListener('click', async () => {
+  const ok = await showConfirm('确认将唤醒词重置为默认值（DT打/DT修/DT控）？当前修改将丢失。');
+  if (!ok) return;
+  emit('drop-typing://reset-wakeword-config');
+});
+
+// 查看 token
+btnWakewordTokens.addEventListener('click', () => {
+  const keywords = wakewordEntries.filter(e => e.keyword.trim());
+  if (keywords.length === 0) {
+    toast('danger', '请先添加至少一个唤醒词');
+    return;
+  }
+  btnWakewordTokens.textContent = '计算中…';
+  btnWakewordTokens.disabled = true;
+  dlgTokensContent.textContent = '计算中…';
+  dlgTokens.show();
+  emit('drop-typing://preview-wakeword-tokens', { keywords });
+});
+
+dlgTokensClose.addEventListener('click', () => dlgTokens.hide());
+
+// ── 重启应用 ───────────────────────────────────────────────────────
+
+const btnRestart = document.getElementById('btn-restart') as any;
+btnRestart.addEventListener('click', async () => {
+  const ok = await showConfirm('确认重启应用？未保存的修改将丢失。');
+  if (!ok) return;
+  emit('drop-typing://restart');
+});
+
+// ── 事件监听 ───────────────────────────────────────────────────────
+listen<any>('drop-typing://wakeword-config', (e) => {
+  const d = e.payload;
+  wakewordDefaults = d.defaults || [];
+  wakewordHasCustom = d.has_custom;
+  if (d.keywords && d.keywords.length > 0) {
+    wakewordEntries = d.keywords.map((k: any) => ({
+      keyword: k.keyword,
+      action: k.action,
+    }));
+  } else {
+    wakewordEntries = wakewordDefaults.map((k: any) => ({
+      keyword: k.keyword,
+      action: k.action,
+    }));
+  }
+  renderWakewordList();
+});
+
+listen<any>('drop-typing://wakeword-saved', (e) => {
+  btnWakewordSave.textContent = '保存';
+  btnWakewordSave.disabled = false;
+  if (e.payload.success) {
+    toast('success', '唤醒词配置已保存。请重启应用使配置生效。');
+  } else {
+    toast('danger', e.payload.error || '保存失败');
+  }
+});
+
+listen<any>('drop-typing://wakeword-reset', (e) => {
+  if (e.payload.success) {
+    wakewordEntries = wakewordDefaults.map((k: any) => ({
+      keyword: k.keyword,
+      action: k.action,
+    }));
+    renderWakewordList();
+    toast('success', '已重置为默认值。请重启应用使配置生效。');
+  } else {
+    toast('danger', e.payload.error || '重置失败');
+  }
+});
+
+listen<any>('drop-typing://wakeword-tokens', (e) => {
+  btnWakewordTokens.textContent = '查看 Token';
+  btnWakewordTokens.disabled = false;
+  if (e.payload.error) {
+    dlgTokensContent.textContent = `错误：${e.payload.error}`;
+  } else if (e.payload.lines) {
+    dlgTokensContent.textContent = e.payload.lines.join('\n');
+  }
+});
+
+// 页面加载时请求唤醒词配置
+requestWakewordConfig();
+
+// ── 快捷键面板 ─────────────────────────────────────────────────────
+
+// ---- 常量 ----
+
+const SHORTCUT_CHANNELS = [
+  { key: 'trigger', label: '录入 (Trigger)', desc: '长按录音，短按提交' },
+  { key: 'repair',  label: '修正 (Repair)',  desc: '修正/控制通道' },
+  { key: 'command', label: '指令 (Command)', desc: '指令/修复通道' },
+  { key: 'cancel',  label: '取消 (Cancel)',  desc: '清空暂存条' },
+] as const;
+
+const MOUSE_CHANNELS = [
+  { key: 'trigger', label: '录入 (Trigger)', desc: '前进键 (Forward / X2)' },
+  { key: 'repair',  label: '修正 (Repair)',  desc: '后退键 (Back / X1)' },
+] as const;
+
+// DOM event.code → rdev 键名映射
+const DOM_CODE_TO_RDEV: Record<string, string> = {
+  // 修饰键
+  MetaRight: 'MetaRight', MetaLeft: 'MetaLeft',
+  AltRight: 'AltGr', AltLeft: 'Alt',
+  ShiftRight: 'ShiftRight', ShiftLeft: 'ShiftLeft',
+  ControlRight: 'ControlRight', ControlLeft: 'ControlLeft',
+  // 导航
+  Escape: 'Escape', Space: 'Space', Tab: 'Tab',
+  Enter: 'Return', Backspace: 'Backspace', Delete: 'Delete',
+  ArrowUp: 'UpArrow', ArrowDown: 'DownArrow',
+  ArrowLeft: 'LeftArrow', ArrowRight: 'RightArrow',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  Insert: 'Insert', CapsLock: 'CapsLock',
+  NumLock: 'NumLock', ScrollLock: 'ScrollLock',
+  Pause: 'Pause', PrintScreen: 'PrintScreen',
+  // 功能键
+  F1:'F1',F2:'F2',F3:'F3',F4:'F4',F5:'F5',F6:'F6',
+  F7:'F7',F8:'F8',F9:'F9',F10:'F10',F11:'F11',F12:'F12',
+  // 字母键
+  KeyA:'KeyA',KeyB:'KeyB',KeyC:'KeyC',KeyD:'KeyD',KeyE:'KeyE',
+  KeyF:'KeyF',KeyG:'KeyG',KeyH:'KeyH',KeyI:'KeyI',KeyJ:'KeyJ',
+  KeyK:'KeyK',KeyL:'KeyL',KeyM:'KeyM',KeyN:'KeyN',KeyO:'KeyO',
+  KeyP:'KeyP',KeyQ:'KeyQ',KeyR:'KeyR',KeyS:'KeyS',KeyT:'KeyT',
+  KeyU:'KeyU',KeyV:'KeyV',KeyW:'KeyW',KeyX:'KeyX',KeyY:'KeyY',
+  KeyZ:'KeyZ',
+  // 数字键
+  Digit0:'Num0',Digit1:'Num1',Digit2:'Num2',Digit3:'Num3',Digit4:'Num4',
+  Digit5:'Num5',Digit6:'Num6',Digit7:'Num7',Digit8:'Num8',Digit9:'Num9',
+  // 符号键
+  Backquote: 'BackQuote', Minus: 'Minus', Equal: 'Equal',
+  BracketLeft: 'LeftBracket', BracketRight: 'RightBracket',
+  Semicolon: 'SemiColon', Quote: 'Quote',
+  Backslash: 'BackSlash', IntlBackslash: 'IntlBackslash',
+  Comma: 'Comma', Period: 'Dot', Slash: 'Slash',
+  // 小键盘
+  NumpadEnter: 'KpReturn',
+  NumpadSubtract: 'KpMinus', NumpadAdd: 'KpPlus',
+  NumpadMultiply: 'KpMultiply', NumpadDivide: 'KpDivide',
+  NumpadDecimal: 'KpDelete',
+  Numpad0:'Kp0',Numpad1:'Kp1',Numpad2:'Kp2',Numpad3:'Kp3',Numpad4:'Kp4',
+  Numpad5:'Kp5',Numpad6:'Kp6',Numpad7:'Kp7',Numpad8:'Kp8',Numpad9:'Kp9',
+};
+
+// 家族名平台显示名称
+const FAMILY_DISPLAY: Record<string, Record<string, string>> = {
+  macos:   { Control: 'Ctrl', Meta: 'Cmd', Alt: 'Opt', Shift: 'Shift' },
+  windows: { Control: 'Ctrl', Meta: 'Win', Alt: 'Alt',  Shift: 'Shift' },
+};
+
+// rdev 精确键 → 显示名称
+const KEY_DISPLAY_BY_PLATFORM: Record<string, Record<string, string>> = {
+  macos: {
+    MetaRight: '右 Cmd', MetaLeft: '左 Cmd',
+    AltGr: '右 Opt', Alt: '左 Opt',
+    ShiftRight: '右 Shift', ShiftLeft: '左 Shift',
+    ControlRight: '右 Ctrl', ControlLeft: '左 Ctrl',
+  },
+  windows: {
+    MetaRight: '右 Win', MetaLeft: '左 Win',
+    AltGr: 'AltGr', Alt: 'Alt',
+    ShiftRight: '右 Shift', ShiftLeft: '左 Shift',
+    ControlRight: '右 Ctrl', ControlLeft: '左 Ctrl',
+  },
+};
+const KEY_DISPLAY_COMMON: Record<string, string> = {
+  Escape: 'Esc', Space: '空格', Tab: 'Tab', Return: 'Enter',
+  Backspace: 'Backspace', Delete: 'Delete',
+  CapsLock: 'CapsLock',
+  UpArrow: '↑', DownArrow: '↓', LeftArrow: '←', RightArrow: '→',
+  Home: 'Home', End: 'End', PageUp: 'PgUp', PageDown: 'PgDn',
+  Insert: 'Insert', NumLock: 'NumLock',
+  Pause: 'Pause', PrintScreen: 'PrtSc',
+};
+
+function keySpecDisplay(name: string, platform: string): string {
+  // 家族名
+  if (['Control', 'Meta', 'Alt', 'Shift'].includes(name)) {
+    return FAMILY_DISPLAY[platform]?.[name] ?? name;
+  }
+  // 平台特定精确键
+  const pd = KEY_DISPLAY_BY_PLATFORM[platform];
+  if (pd?.[name]) return pd[name];
+  // 通用精确键
+  if (KEY_DISPLAY_COMMON[name]) return KEY_DISPLAY_COMMON[name];
+  // KeyA → A, Num1 → 1, F1 → F1
+  if (name.startsWith('Key') && name.length === 4) return name[3];
+  if (name.startsWith('Num') && name.length === 4) return name[3];
+  if (name.startsWith('Kp') && name.length === 3) return 'Num' + name[2];
+  return name;
+}
+
+function formatShortcut(keys: string[], platform: string): string {
+  if (!keys || keys.length === 0) return '未设置';
+  return keys.map(k => keySpecDisplay(k, platform)).join(' + ');
+}
+
+// ---- 状态 ----
+
+interface ShortcutState {
+  platform: 'macos' | 'windows';
+  keyboard: Record<string, string[]>;
+  mouse: Record<string, string | null>;
+  defaults: {
+    keyboard: Record<string, string[]>;
+    mouse: Record<string, string | null>;
+  };
+}
+
+let shortcutState: ShortcutState = {
+  platform: 'macos',
+  keyboard: {},
+  mouse: {},
+  defaults: { keyboard: {}, mouse: {} },
+};
+
+let recordingChannel: string | null = null;
+let recordingGroup: 'keyboard' | null = null;
+let recordingTeardown: (() => void) | null = null;
+
+// ---- DOM ----
+
+const keyboardChannelsEl = document.getElementById('keyboard-channels')!;
+const mouseChannelsEl = document.getElementById('mouse-channels')!;
+const platformHintEl = document.getElementById('platform-hint')!;
+const btnShortcutSave = document.getElementById('btn-shortcut-save') as any;
+const btnShortcutReset = document.getElementById('btn-shortcut-reset') as any;
+
+// ---- 渲染 ----
+
+function renderKeyboardChannels() {
+  keyboardChannelsEl.innerHTML = '';
+  for (const ch of SHORTCUT_CHANNELS) {
+    const keys = shortcutState.keyboard[ch.key] || [];
+    const isRecording = recordingGroup === 'keyboard' && recordingChannel === ch.key;
+
+    const row = document.createElement('div');
+    row.className = 'shortcut-row';
+
+    // 标签 + 描述
+    const info = document.createElement('div');
+    info.className = 'shortcut-info';
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'shortcut-label';
+    labelSpan.textContent = ch.label;
+    const descSpan = document.createElement('span');
+    descSpan.className = 'shortcut-desc';
+    descSpan.textContent = ch.desc;
+    info.append(labelSpan, descSpan);
+
+    // 当前值显示
+    const display = document.createElement('span');
+    display.className = 'shortcut-display';
+    display.dataset.channel = ch.key;
+    if (isRecording) {
+      display.textContent = '正在录制…';
+      display.classList.add('recording');
+    } else {
+      display.textContent = formatShortcut(keys, shortcutState.platform);
+    }
+
+    // 录制按钮
+    const recBtn = document.createElement('sl-button');
+    recBtn.size = 'small';
+    recBtn.variant = isRecording ? 'danger' : 'neutral';
+    recBtn.textContent = isRecording ? '取消' : '录制';
+    recBtn.addEventListener('click', () => {
+      if (isRecording) {
+        cancelRecording();
+      } else {
+        startRecording('keyboard', ch.key);
+      }
+    });
+
+    // 清除按钮
+    const clearBtn = document.createElement('sl-button');
+    clearBtn.size = 'small';
+    clearBtn.variant = 'default';
+    clearBtn.textContent = '清除';
+    clearBtn.addEventListener('click', () => {
+      shortcutState.keyboard[ch.key] = [];
+      renderKeyboardChannels();
+    });
+
+    const btnGroup = document.createElement('div');
+    btnGroup.className = 'shortcut-btn-group';
+    btnGroup.append(recBtn, clearBtn);
+
+    row.append(info, display, btnGroup);
+    keyboardChannelsEl.appendChild(row);
+  }
+}
+
+function renderMouseChannels() {
+  mouseChannelsEl.innerHTML = '';
+  for (const ch of MOUSE_CHANNELS) {
+    const current = shortcutState.mouse[ch.key] || 'none';
+
+    const row = document.createElement('div');
+    row.className = 'shortcut-row';
+
+    const info = document.createElement('div');
+    info.className = 'shortcut-info';
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'shortcut-label';
+    labelSpan.textContent = ch.label;
+    const descSpan = document.createElement('span');
+    descSpan.className = 'shortcut-desc';
+    descSpan.textContent = ch.desc;
+    info.append(labelSpan, descSpan);
+
+    const select = document.createElement('sl-select');
+    select.className = 'mouse-select';
+    select.size = 'small';
+    select.value = current;
+    select.addEventListener('sl-change', (e: any) => {
+      const val = e.target.value;
+      shortcutState.mouse[ch.key] = val === 'none' ? null : val;
+    });
+
+    const options = [
+      { value: 'none', label: '无' },
+      { value: 'forward', label: '前进键 (Forward)' },
+      { value: 'back', label: '后退键 (Back)' },
+    ];
+    for (const opt of options) {
+      const option = document.createElement('sl-option');
+      option.value = opt.value;
+      option.textContent = opt.label;
+      select.appendChild(option);
+    }
+
+    row.append(info, select);
+    mouseChannelsEl.appendChild(row);
+  }
+}
+
+function renderAllShortcut() {
+  renderKeyboardChannels();
+  renderMouseChannels();
+}
+
+// ---- 录制逻辑 ----
+
+function updateRecordingHint(mods: string[]) {
+  const displayEl = document.querySelector(`.shortcut-display[data-channel="${recordingChannel}"]`);
+  if (displayEl) {
+    const names = mods.map(m => FAMILY_DISPLAY[shortcutState.platform]?.[m] ?? m).join(' + ');
+    displayEl.textContent = `正在录制… ${names} + ?`;
+  }
+}
+
+function cancelRecording() {
+  recordingTeardown?.();
+  recordingTeardown = null;
+  recordingChannel = null;
+  recordingGroup = null;
+  renderKeyboardChannels();
+}
+
+function startRecording(group: 'keyboard', channel: string) {
+  // 取消已有的录制
+  if (recordingTeardown) recordingTeardown();
+
+  recordingGroup = group;
+  recordingChannel = channel;
+  const platform = shortcutState.platform;
+
+  // 点击面板外取消录制
+  const onClickAway = (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest('#panel-shortcut')) {
+      cancelRecording();
+    }
+  };
+  document.addEventListener('click', onClickAway, true);
+
+  if (platform === 'windows') {
+    // Windows：追踪修饰键组合
+    const heldMods: string[] = [];
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Escape 取消
+      if (e.code === 'Escape') { e.preventDefault(); cancelRecording(); return; }
+
+      // 追踪修饰键家族
+      if (e.code.startsWith('Control')) { e.preventDefault(); if (!heldMods.includes('Control')) heldMods.push('Control'); updateRecordingHint(heldMods); return; }
+      if (e.code.startsWith('Meta'))     { e.preventDefault(); if (!heldMods.includes('Meta')) heldMods.push('Meta'); updateRecordingHint(heldMods); return; }
+      if (e.code.startsWith('Alt'))      { e.preventDefault(); if (!heldMods.includes('Alt')) heldMods.push('Alt'); updateRecordingHint(heldMods); return; }
+      if (e.code.startsWith('Shift'))    { e.preventDefault(); if (!heldMods.includes('Shift')) heldMods.push('Shift'); updateRecordingHint(heldMods); return; }
+
+      // 非修饰键：确认组合
+      e.preventDefault();
+      const rdevName = DOM_CODE_TO_RDEV[e.code];
+      if (rdevName && heldMods.length > 0) {
+        // 修饰键 + 普通键 → 保存修饰键组合
+        shortcutState.keyboard[channel] = heldMods.slice();
+      } else if (rdevName) {
+        // 无修饰键 → 单键
+        shortcutState.keyboard[channel] = [rdevName];
+      }
+      stopRecording();
+      renderKeyboardChannels();
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code.startsWith('Control')) heldMods.splice(heldMods.indexOf('Control'), 1);
+      if (e.code.startsWith('Meta'))    heldMods.splice(heldMods.indexOf('Meta'), 1);
+      if (e.code.startsWith('Alt'))     heldMods.splice(heldMods.indexOf('Alt'), 1);
+      if (e.code.startsWith('Shift'))   heldMods.splice(heldMods.indexOf('Shift'), 1);
+
+      // 所有修饰键释放：如果只有修饰键被按下，以修饰键组合确认
+      if (heldMods.length === 0) {
+        // 等到下一个 tick 判断：如果没按其他键，可能是只按了修饰键
+        // 这里不做自动确认，留给超时处理
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    recordingTeardown = () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('click', onClickAway, true);
+    };
+  } else {
+    // macOS：捕获单个按键
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Escape 取消
+      if (e.code === 'Escape') { e.preventDefault(); cancelRecording(); return; }
+
+      // 阻止修饰键默认行为
+      if (e.code.startsWith('Meta') || e.code.startsWith('Alt') ||
+          e.code.startsWith('Control') || e.code.startsWith('Shift')) {
+        e.preventDefault();
+      }
+
+      const rdevName = DOM_CODE_TO_RDEV[e.code];
+      if (rdevName) {
+        shortcutState.keyboard[channel] = [rdevName];
+        stopRecording();
+        renderKeyboardChannels();
+        return;
+      }
+      // 不支持的按键
+      toast('danger', `暂不支持的按键: ${e.code}`);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    recordingTeardown = () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('click', onClickAway, true);
+    };
+  }
+
+  // 10 秒超时
+  const timeoutId = setTimeout(() => {
+    if (recordingChannel === channel) {
+      cancelRecording();
+      toast('danger', '录制超时，已取消');
+    }
+  }, 10000);
+  const prevTeardown = recordingTeardown!;
+  recordingTeardown = () => { clearTimeout(timeoutId); prevTeardown(); };
+
+  renderKeyboardChannels();
+}
+
+function stopRecording() {
+  recordingTeardown?.();
+  recordingTeardown = null;
+  recordingChannel = null;
+  recordingGroup = null;
+}
+
+// ---- 事件 ----
+
+btnShortcutSave.addEventListener('click', () => {
+  btnShortcutSave.textContent = '保存中…';
+  btnShortcutSave.disabled = true;
+  emit('drop-typing://save-shortcut-config', {
+    keyboard: shortcutState.keyboard,
+    mouse: shortcutState.mouse,
+  });
+});
+
+btnShortcutReset.addEventListener('click', async () => {
+  const ok = await showConfirm('确认将快捷键重置为平台默认值？当前修改将丢失。');
+  if (!ok) return;
+  emit('drop-typing://reset-shortcut-config');
+});
+
+function requestShortcutConfig() {
+  emit('drop-typing://get-shortcut-config');
+}
+
+// ---- 事件监听 ----
+
+listen<any>('drop-typing://shortcut-config', (e) => {
+  const d = e.payload;
+  shortcutState.platform = d.platform;
+  shortcutState.keyboard = { ...d.keyboard };
+  shortcutState.mouse = { ...d.mouse };
+  shortcutState.defaults = {
+    keyboard: { ...d.defaults.keyboard },
+    mouse: { ...d.defaults.mouse },
+  };
+  // 平台提示
+  platformHintEl.textContent = d.platform === 'macos'
+    ? 'macOS：单键快捷键（如右 Cmd、右 Opt 等）'
+    : 'Windows：组合快捷键（如 Win + Alt 等）';
+  renderAllShortcut();
+});
+
+listen<any>('drop-typing://shortcut-saved', (e) => {
+  btnShortcutSave.textContent = '保存';
+  btnShortcutSave.disabled = false;
+  if (e.payload.success) {
+    toast('success', '快捷键已保存。请重启应用使配置生效。');
+  } else {
+    toast('danger', e.payload.error || '保存失败');
+  }
+});
+
+listen<any>('drop-typing://shortcut-reset', (e) => {
+  if (e.payload.success) {
+    requestShortcutConfig();
+    toast('success', '已重置为默认值。请重启应用使配置生效。');
+  } else {
+    toast('danger', e.payload.error || '重置失败');
+  }
+});
+
+// ── 初始化 ────────────────────────────────────────────────────────────
 
 emit('drop-typing://settings-ready');

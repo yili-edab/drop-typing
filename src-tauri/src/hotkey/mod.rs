@@ -81,6 +81,16 @@ impl ModFamily {
     pub fn family_names() -> &'static [&'static str] {
         &["Control", "Meta", "Alt", "Shift"]
     }
+
+    /// 配置文件中使用的规范家族名
+    pub fn config_name(&self) -> &'static str {
+        match self {
+            ModFamily::Control => "Control",
+            ModFamily::Meta => "Meta",
+            ModFamily::Alt => "Alt",
+            ModFamily::Shift => "Shift",
+        }
+    }
 }
 
 /// 一个按键规格：可以是整个修饰键家族（左右皆可），也可以是精确的 rdev Key。
@@ -121,6 +131,17 @@ impl KeySpec {
         match self {
             KeySpec::Family(f) => f.matches(key),
             KeySpec::Exact(k) => key == k,
+        }
+    }
+
+    /// 将 KeySpec 序列化为配置字符串（与 TOML 中的写法一致）。
+    ///
+    /// 家族名返回 `"Control"` / `"Meta"` / `"Alt"` / `"Shift"`；
+    /// 精确键返回 rdev 变体名（如 `"MetaRight"`、`"Escape"`、`"KeyA"`）。
+    pub fn to_config_name(&self) -> String {
+        match self {
+            KeySpec::Family(f) => f.config_name().to_string(),
+            KeySpec::Exact(k) => format!("{:?}", k),
         }
     }
 }
@@ -255,7 +276,7 @@ pub struct Bindings {
     pub command: Vec<KeySpec>,
     /// 清空暂存条
     pub cancel: Vec<KeySpec>,
-    /// 鼠标侧键（缺省不绑）
+    /// 鼠标侧键（前进键 → 录入，后退键 → 修复）
     pub mouse: MouseBindings,
 }
 
@@ -271,12 +292,23 @@ pub enum MouseButton {
 }
 
 /// 鼠标侧键绑定。
-#[derive(Debug, Clone, Default)]
+///
+/// 默认值：前进键 → 录入（Trigger），后退键 → 修复（Repair）。
+#[derive(Debug, Clone)]
 pub struct MouseBindings {
     /// 输入/提交通道（前进键，长按录音、短按提交）
     pub trigger: Option<MouseButton>,
     /// 修正通道（后退键，长按说修正指令）
     pub repair: Option<MouseButton>,
+}
+
+impl Default for MouseBindings {
+    fn default() -> Self {
+        Self {
+            trigger: Some(MouseButton::Forward),
+            repair: Some(MouseButton::Back),
+        }
+    }
 }
 
 impl Bindings {
@@ -339,4 +371,12 @@ pub fn default_source() -> Box<dyn HotkeySource> {
 #[cfg(target_os = "windows")]
 pub fn default_source() -> Box<dyn HotkeySource> {
     Box::new(windows::WindowsHotkey)
+}
+
+/// 当前平台名称（用于设置页面平台差异展示）。
+pub fn platform_name() -> &'static str {
+    #[cfg(target_os = "macos")]
+    { "macos" }
+    #[cfg(target_os = "windows")]
+    { "windows" }
 }

@@ -36,6 +36,7 @@ use crate::wakeword::{self, WakeEvent, WakeWord};
 
 /// 录音目的：输入通道（右 ⌘）、修正通道（右 ⌥）还是指令通道（右 ⇧，M4）。
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum RecordMode {
     Input,
     Repair,
@@ -273,13 +274,44 @@ fn run_loop(
                         if let Some(ref wrx) = wake_rx {
                             if let Ok(event) = wrx.try_recv() {
                                 let WakeEvent::Detected { word, position } = event;
-                                start_wake_recording(
-                                        &staging, &recorder, &cfg, &backend,
-                                        buffer, word, position,
-                                        &cleaner, &injector, command_countdown,
-                                        &command_gen, &lexicon, &current_style,
-                                        &mut state,
-                                    );
+                                eprintln!(
+                                    "[drop-typing] pipeline 收到 WakeEvent: keyword='{}' action='{}'",
+                                    word.text, word.action,
+                                );
+                                match word.action.as_str() {
+                                    // 唤醒词 → 立即提交暂存条（不录音）
+                                    "commit" => {
+                                        commit(&staging, injector.as_ref());
+                                    }
+                                    // 唤醒词 → 清空暂存条（不录音）
+                                    "clear" => {
+                                        // 第一唤：仅消除错误，保留暂存条
+                                        if staging.has_error() {
+                                            staging.clear_error();
+                                        } else {
+                                            // 第二唤（或无错误）：完整清空
+                                            command_gen.fetch_add(1, Ordering::SeqCst);
+                                            staging.take();
+                                            staging.set_recording(false);
+                                            staging.set_busy(false);
+                                            staging.set_status("");
+                                            staging.set_repair_note("");
+                                            staging.clear_command();
+                                            staging.clear_error();
+                                            staging.hide();
+                                        }
+                                    }
+                                    // 其他 action → 录音转写
+                                    _ => {
+                                        start_wake_recording(
+                                            &staging, &recorder, &cfg, &backend,
+                                            buffer, word, position,
+                                            &cleaner, &injector, command_countdown,
+                                            &command_gen, &lexicon, &current_style,
+                                            &mut state,
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -291,7 +323,13 @@ fn run_loop(
             HotkeyEvent::Error(msg) => staging.error(&msg),
 
             HotkeyEvent::CancelDown => {
-                // Esc 按下：丢弃当前录音（如果有）、清空暂存条并隐藏窗口
+                // 第一按 ESC：仅消除错误，保留暂存条
+                if staging.has_error() {
+                    staging.clear_error();
+                    state = idle_state();
+                    continue;
+                }
+                // 第二按 ESC（或无错误）：完整清空
                 if let State::Recording { .. } = &state {
                     if let Some(r) = &recorder {
                         r.discard();
@@ -939,11 +977,18 @@ fn run_loop(
 
 // ── 唤醒词 → RecordMode 映射 ────────────────────────────────────────
 
-fn wake_word_to_mode(word: WakeWord) -> RecordMode {
-    match word {
-        WakeWord::Da => RecordMode::Input,
-        WakeWord::Xiu => RecordMode::Repair,
-        WakeWord::An => RecordMode::Command,
+fn wake_word_to_mode(word: &WakeWord) -> RecordMode {
+    match word.action.as_str() {
+        "input" => RecordMode::Input,
+        "repair" => RecordMode::Repair,
+        "command" => RecordMode::Command,
+        other => {
+            eprintln!(
+                "[drop-typing] 唤醒词 '{}' 的 action='{other}' 未知，回退为 Input",
+                word.text,
+            );
+            RecordMode::Input
+        }
     }
 }
 
@@ -970,7 +1015,11 @@ fn start_wake_recording(
     _current_style: &Arc<Mutex<Option<String>>>,
     state: &mut State,
 ) {
-    let mode = wake_word_to_mode(word);
+    let mode = wake_word_to_mode(&word);
+    eprintln!(
+        "[drop-typing] start_wake_recording 进入：keyword='{}' action='{}' mode={:?}",
+        word.text, word.action, mode,
+    );
     let sample_rate: u64 = 16_000;
     let pre_roll_samples = cfg.wakeword.pre_roll_ms * sample_rate / 1000;
     let silence_samples = cfg.wakeword.silence_timeout_ms * sample_rate / 1000;

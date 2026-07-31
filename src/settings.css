@@ -17,8 +17,10 @@ html, body {
   flex: none; width: 180px; padding: 16px 0;
   background: var(--sl-color-neutral-0);
   border-right: 1px solid var(--sl-color-neutral-200);
+  display: flex;
+  flex-direction: column;
 }
-#menu ul { list-style: none; margin: 0; padding: 0; }
+#menu ul { list-style: none; margin: 0; padding: 0; flex: 1; }
 #menu li {
   padding: 10px 20px; cursor: pointer; font-size: 14px; font-weight: 500;
   color: var(--sl-color-neutral-700); border-left: 3px solid transparent;
@@ -30,6 +32,11 @@ html, body {
   border-left-color: var(--sl-color-primary-600);
   background: var(--sl-color-primary-50);
 }
+#nav-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--sl-color-neutral-200);
+}
+#nav-footer sl-button { width: 100%; }
 
 #content { flex: 1; min-width: 0; padding: 16px 32px 24px; overflow-y: auto; }
 .panel { display: none; }
@@ -109,4 +116,127 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--sl-color-neutral-500);
+}
+
+/* ---- 语音唤醒面板 ---- */
+#wakeword-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.wakeword-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.wakeword-row .kw-text {
+  flex: 1;
+}
+.wakeword-row .kw-action {
+  width: 140px;
+}
+.wakeword-row .kw-delete {
+  flex: none;
+}
+#btn-add-wakeword {
+  margin-bottom: 12px;
+}
+
+/* ---- 右下角全局操作 ---- */
+
+/* ---- 快捷键面板 ---- */
+
+.shortcut-subsection {
+  margin-bottom: 24px;
+}
+.subsection-label {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--sl-color-neutral-800);
+}
+
+.shortcut-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--sl-color-neutral-0);
+  border: 1px solid var(--sl-color-neutral-200);
+  border-radius: 8px;
+}
+
+.shortcut-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  flex: none;
+}
+.shortcut-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sl-color-neutral-800);
+}
+.shortcut-desc {
+  font-size: 11px;
+  color: var(--sl-color-neutral-500);
+  margin-top: 2px;
+}
+
+.shortcut-display {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--sl-color-primary-600);
+  background: var(--sl-color-primary-50);
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+.shortcut-display.recording {
+  background: var(--sl-color-danger-50);
+  color: var(--sl-color-danger-600);
+  animation: pulse-border 1s ease-in-out infinite;
+}
+
+@keyframes pulse-border {
+  0%, 100% { box-shadow: 0 0 0 0 var(--sl-color-danger-300); }
+  50%      { box-shadow: 0 0 0 4px var(--sl-color-danger-300); }
+}
+
+.shortcut-btn-group {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.mouse-select {
+  width: 200px;
+}
+
+.placeholder-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  border: 2px dashed var(--sl-color-neutral-200);
+  border-radius: 12px;
+  background: var(--sl-color-neutral-50);
+  margin-top: 10px;
 }

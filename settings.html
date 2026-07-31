@@ -13,7 +13,13 @@
         <ul>
           <li data-panel="base" class="active">基础润色</li>
           <li data-panel="advanced">高级润色</li>
+          <li data-panel="wakeword">语音唤醒</li>
+          <li data-panel="shortcut">快捷键</li>
+          <li data-panel="hardware">定制硬件</li>
         </ul>
+        <div id="nav-footer">
+          <sl-button id="btn-restart" variant="warning" size="small">重启应用</sl-button>
+        </div>
       </nav>
       <main id="content">
 
@@ -83,8 +89,79 @@
             <sl-button id="btn-style-ai" variant="neutral">AI 优化</sl-button>
           </div>
         </section>
+
+        <!-- 语音唤醒面板 -->
+        <section id="panel-wakeword" class="panel">
+          <label for="wakeword-list">语音唤醒词</label>
+          <p class="help">
+            自定义语音唤醒词及对应功能。保存后需<strong>重启应用</strong>生效。
+          </p>
+
+          <!-- 关键词列表 -->
+          <div id="wakeword-list">
+            <!-- JS 动态填充 -->
+          </div>
+
+          <!-- 添加按钮 -->
+          <sl-button id="btn-add-wakeword" size="small" variant="neutral">
+            <sl-icon name="plus-lg" slot="prefix"></sl-icon> 添加唤醒词
+          </sl-button>
+
+          <div class="actions">
+            <sl-button id="btn-wakeword-tokens" variant="default">查看 Token</sl-button>
+            <sl-button id="btn-wakeword-reset" variant="default">重置</sl-button>
+            <sl-button id="btn-wakeword-save" variant="primary">保存</sl-button>
+          </div>
+        </section>
+
+        <!-- 快捷键面板 -->
+        <section id="panel-shortcut" class="panel">
+
+          <!-- == 键盘 == -->
+          <div class="shortcut-subsection">
+            <label class="subsection-label">键盘</label>
+            <p class="help">
+              配置各通道的键盘快捷键。点击「录制」后按下目标按键即可捕获。
+              <span id="platform-hint"></span>
+            </p>
+            <div id="keyboard-channels" class="shortcut-channels">
+              <!-- JS 动态填充 -->
+            </div>
+          </div>
+
+          <!-- == 鼠标 == -->
+          <div class="shortcut-subsection">
+            <label class="subsection-label">鼠标</label>
+            <p class="help">配置鼠标侧键与功能通道的绑定。</p>
+            <div id="mouse-channels" class="shortcut-channels">
+              <!-- JS 动态填充 -->
+            </div>
+          </div>
+
+          <div class="actions">
+            <sl-button id="btn-shortcut-reset" variant="default">重置</sl-button>
+            <sl-button id="btn-shortcut-save" variant="primary">保存</sl-button>
+          </div>
+        </section>
+
+        <!-- Token 预览弹窗 -->
+        <sl-dialog id="dlg-tokens" label="唤醒词 Token 预览">
+          <pre id="dlg-tokens-content" style="font-size:12px; max-height:400px; overflow-y:auto; white-space:pre-wrap; background:var(--sl-color-neutral-100); padding:12px; border-radius:6px;"></pre>
+          <sl-button slot="footer" variant="primary" id="dlg-tokens-close">关闭</sl-button>
+        </sl-dialog>
+
+        <!-- 定制硬件面板 -->
+        <section id="panel-hardware" class="panel">
+          <label>定制硬件</label>
+          <p class="help">连接和管理定制硬件设备。</p>
+          <div class="placeholder-box">
+            <sl-icon name="gear" style="font-size:32px; color:var(--sl-color-neutral-300);"></sl-icon>
+            <p style="color:var(--sl-color-neutral-400); margin-top:8px;">定制硬件支持即将推出</p>
+          </div>
+        </section>
       </main>
     </div>
+
     <script type="module" src="/src/settings.ts"></script>
   </body>
 </html>

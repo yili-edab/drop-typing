@@ -95,22 +95,47 @@ pub struct SherpaKws {
 }
 
 impl SherpaKws {
-    /// 从模型目录加载唤醒词引擎。
-    ///
-    /// `keywords` 为 `[(keyword_text, wake_word), ...]` 列表，
-    /// 内部调用 sherpa-onnx 的 tokenizer API 生成 token 格式的 keywords 字符串。
+    /// 从模型目录加载唤醒词引擎（使用静态 keywords.txt 文件）。
     pub fn load(
         model_dir: &Path,
         keywords: &[(String, WakeWord)],
         threshold: f32,
         score: f32,
     ) -> anyhow::Result<Self> {
-        // 验证模型文件存在（keywords.txt 由调用方在之前生成）
+        let keywords_file = model_dir.join("keywords.txt");
+        Self::load_impl(model_dir, keywords, None, Some(&keywords_file), threshold, score)
+    }
+
+    /// 从模型目录加载唤醒词引擎（使用动态生成的 token buffer）。
+    ///
+    /// `keywords_buf` 为 text2token 输出的 token 格式字符串（每行一个关键词）。
+    /// 使用此方法时不需要 keywords.txt 文件。
+    pub fn load_with_buf(
+        model_dir: &Path,
+        keywords: &[(String, WakeWord)],
+        keywords_buf: &str,
+        threshold: f32,
+        score: f32,
+    ) -> anyhow::Result<Self> {
+        Self::load_impl(model_dir, keywords, Some(keywords_buf), None, threshold, score)
+    }
+
+    /// 统一的内部加载逻辑。
+    ///
+    /// `keywords_buf` 和 `keywords_file` 至少提供一个。
+    fn load_impl(
+        model_dir: &Path,
+        keywords: &[(String, WakeWord)],
+        keywords_buf: Option<&str>,
+        keywords_file: Option<&Path>,
+        threshold: f32,
+        score: f32,
+    ) -> anyhow::Result<Self> {
+        // 验证模型文件存在
         let encoder = model_dir.join("encoder.onnx");
         let decoder = model_dir.join("decoder.onnx");
         let joiner = model_dir.join("joiner.onnx");
         let tokens = model_dir.join("tokens.txt");
-        let keywords_file = model_dir.join("keywords.txt");
 
         for (name, path) in [
             ("encoder.onnx", &encoder),
@@ -126,26 +151,23 @@ impl SherpaKws {
             }
         }
 
-        // keywords.txt 应由 phoneme::write_keywords_txt 在此前生成
-        if !keywords_file.exists() {
-            return Err(anyhow::anyhow!(
-                "keywords.txt 缺失：{}",
-                keywords_file.display(),
-            ));
+        // keywords.txt 仅在未提供 buf 时需要
+        if keywords_buf.is_none() {
+            let kf = keywords_file.ok_or_else(|| {
+                anyhow::anyhow!("keywords_buf 和 keywords_file 均为 None")
+            })?;
+            if !kf.exists() {
+                return Err(anyhow::anyhow!("keywords.txt 缺失：{}", kf.display()));
+            }
         }
 
         // 构建 keyword（@标签）→ WakeWord 映射表
         let keyword_map: HashMap<String, WakeWord> = keywords
             .iter()
-            .map(|(k, w)| (k.clone(), *w))
+            .map(|(k, w)| (k.clone(), w.clone()))
             .collect();
 
-        eprintln!(
-            "[drop-typing] 唤醒词：关键词映射 {:#?}",
-            keyword_map.keys().collect::<Vec<_>>(),
-        );
-
-        // 配置 KeywordSpotter —— 使用预生成的 keywords.txt（音素格式）
+        // 配置 KeywordSpotter
         let mut config = KeywordSpotterConfig::default();
         config.model_config.transducer.encoder = Some(
             encoder.to_str().unwrap().to_string(),
@@ -159,17 +181,21 @@ impl SherpaKws {
         config.model_config.tokens = Some(
             tokens.to_str().unwrap().to_string(),
         );
-        config.keywords_file = Some(
-            keywords_file.to_str().unwrap().to_string(),
-        );
         config.keywords_threshold = threshold;
         config.keywords_score = score;
+
+        if let Some(buf) = keywords_buf {
+            config.keywords_buf = Some(buf.to_string());
+            eprintln!("[drop-typing] 唤醒词（sherpa-onnx）：使用动态 token buffer（{} 字节）", buf.len());
+        } else if let Some(kf) = keywords_file {
+            config.keywords_file = Some(kf.to_str().unwrap().to_string());
+        }
 
         let spotter = KeywordSpotter::create(&config)
             .ok_or_else(|| anyhow::anyhow!("创建 KeywordSpotter 失败：模型加载返回 None"))?;
 
         eprintln!(
-            "[drop-typing] 唤醒词（sherpa-onnx）：已加载模型 {}（{} 个关键词，阈值 {:.2}）",
+            "[drop-typing] 唤醒词（sherpa-onnx）：模型 {}（{} 个关键词，阈值 {:.2}）",
             model_dir.display(),
             keywords.len(),
             threshold,
@@ -213,22 +239,49 @@ impl SherpaKws {
 
         match result {
             Some(r) if !r.keyword.is_empty() => {
-                // 在 keyword_map 中查找匹配
-                // 注意：r.keyword 可能和输入不完全一致（如去掉了空格），
-                // 做一次规范化比较
+                // 在 keyword_map 中查找匹配。
+                //
+                // 匹配策略（按优先级）：
+                // 1. 精确匹配（trim + 大小写归一化后相等）
+                // 2. 前向包含：detected 包含 normalized（如 sherpa-onnx 返回
+                //    "DT打" 带多余空格，配置里是 "DT打"）
+                // 3. 后向包含：normalized 包含 detected（仅在前两项都未命中时回退，
+                //    用于兼容旧逻辑，但不作为首选以避免 "杨力" 误匹配到 "杨力确认"）
                 let detected = r.keyword.trim().to_lowercase();
-                let wake_word = self.keyword_map
-                    .iter()
-                    .find(|(k, _)| {
-                        let normalized = k.trim().to_lowercase();
-                        detected.contains(&normalized) || normalized.contains(&detected)
-                    })
-                    .map(|(_, w)| *w);
 
-                eprintln!(
-                    "[drop-typing] 🎤 检测到唤醒词 '{}'（置信度 start_time={:.3}s）",
-                    r.keyword, r.start_time,
-                );
+                let find_exact = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
+                    map.iter()
+                        .find(|(k, _)| k.trim().to_lowercase() == detected)
+                        .map(|(_, w)| w.clone())
+                };
+
+                let find_contains = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
+                    map.iter()
+                        .find(|(k, _)| {
+                            let normalized = k.trim().to_lowercase();
+                            detected.contains(&normalized) || normalized.contains(&detected)
+                        })
+                        .map(|(_, w)| w.clone())
+                };
+
+                let wake_word = find_exact(&self.keyword_map)
+                    .or_else(|| find_contains(&self.keyword_map));
+
+                match &wake_word {
+                    Some(ww) => {
+                        eprintln!(
+                            "[drop-typing] 🎤 唤醒词匹配成功：keyword='{}' action='{}'",
+                            ww.text, ww.action,
+                        );
+                    }
+                    None => {
+                        let keys: Vec<&str> = self.keyword_map.keys().map(|s| s.as_str()).collect();
+                        eprintln!(
+                            "[drop-typing] ⚠ 唤醒词匹配失败！r.keyword='{}'，keyword_map keys={:?}",
+                            r.keyword, keys,
+                        );
+                    }
+                }
 
                 // 重置 stream，避免连续触发同一唤醒词
                 self.spotter.reset(stream);

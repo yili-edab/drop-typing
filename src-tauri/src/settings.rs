@@ -6,6 +6,8 @@ use tauri::{AppHandle, Emitter, Listener, Manager};
 
 use crate::config::Config;
 use crate::prompts::{self, PromptConfig};
+use crate::hotkey::{self, Bindings, KeySpec, MouseButton};
+use crate::config::MouseHotkeyConfig;
 
 // ── 事件处理注册 ──────────────────────────────────────────
 
@@ -286,6 +288,365 @@ pub fn register_settings_handlers(app: &AppHandle) {
             "drop-typing://style-deleted",
             serde_json::json!({ "success": true, "key": key, "existed": existed }),
         );
+    });
+
+    // ── 唤醒词配置：获取当前配置
+    let ah = app.clone();
+    app.listen("drop-typing://get-wakeword-config", move |_| {
+        eprintln!("[drop-typing] get-wakeword-config received");
+        let (cfg, _) = Config::load_lenient();
+        let defaults: Vec<serde_json::Value> = vec![
+            serde_json::json!({ "keyword": "DT打", "action": "input" }),
+            serde_json::json!({ "keyword": "DT修", "action": "repair" }),
+            serde_json::json!({ "keyword": "DT控", "action": "command" }),
+            serde_json::json!({ "keyword": "DT确认", "action": "commit" }),
+            serde_json::json!({ "keyword": "DT清空", "action": "clear" }),
+        ];
+        let keywords: Vec<serde_json::Value> = cfg
+            .wakeword
+            .keywords
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "keyword": e.keyword,
+                    "action": e.action,
+                })
+            })
+            .collect();
+        let _ = ah.emit(
+            "drop-typing://wakeword-config",
+            serde_json::json!({
+                "keywords": keywords,
+                "defaults": defaults,
+                "enabled": cfg.wakeword.enabled,
+                "has_custom": !cfg.wakeword.keywords.is_empty(),
+            }),
+        );
+    });
+
+    // ── 唤醒词配置：保存
+    let ah = app.clone();
+    app.listen("drop-typing://save-wakeword-config", move |ev| {
+        eprintln!("[drop-typing] save-wakeword-config received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+
+        let keywords: Vec<crate::config::KeywordEntry> = payload
+            .get("keywords")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|item| crate::config::KeywordEntry {
+                        keyword: item["keyword"].as_str().unwrap_or("").to_string(),
+                        action: item["action"].as_str().unwrap_or("input").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let (mut cfg, _) = Config::load_lenient();
+        cfg.wakeword.keywords = keywords;
+        cfg.wakeword.enabled = payload
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(cfg.wakeword.enabled);
+
+        match cfg.save() {
+            Ok(()) => {
+                eprintln!(
+                    "[drop-typing] wakeword config saved ({}) keywords",
+                    cfg.wakeword.keywords.len(),
+                );
+                let _ = ah.emit(
+                    "drop-typing://wakeword-saved",
+                    serde_json::json!({ "success": true }),
+                );
+            }
+            Err(e) => {
+                eprintln!("[drop-typing] wakeword config save failed: {e}");
+                let _ = ah.emit(
+                    "drop-typing://wakeword-saved",
+                    serde_json::json!({ "success": false, "error": e.to_string() }),
+                );
+            }
+        }
+    });
+
+    // ── 唤醒词配置：重置为默认值
+    let ah = app.clone();
+    app.listen("drop-typing://reset-wakeword-config", move |_| {
+        eprintln!("[drop-typing] reset-wakeword-config received");
+        let (mut cfg, _) = Config::load_lenient();
+        cfg.wakeword.keywords = Vec::new();
+        match cfg.save() {
+            Ok(()) => {
+                eprintln!("[drop-typing] wakeword config reset to defaults");
+                let _ = ah.emit(
+                    "drop-typing://wakeword-reset",
+                    serde_json::json!({ "success": true }),
+                );
+            }
+            Err(e) => {
+                let _ = ah.emit(
+                    "drop-typing://wakeword-reset",
+                    serde_json::json!({ "success": false, "error": e.to_string() }),
+                );
+            }
+        }
+    });
+
+    // ── 唤醒词 token 预览（调用 text2token 动态计算）
+    let ah = app.clone();
+    app.listen("drop-typing://preview-wakeword-tokens", move |ev| {
+        eprintln!("[drop-typing] preview-wakeword-tokens received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+
+        let keywords: Vec<(String, String)> = payload
+            .get("keywords")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|item| {
+                        (
+                            item["keyword"].as_str().unwrap_or("").to_string(),
+                            item["keyword"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if keywords.is_empty() {
+            let _ = ah.emit(
+                "drop-typing://wakeword-tokens",
+                serde_json::json!({ "error": "没有关键词" }),
+            );
+            return;
+        }
+
+        // 查找模型目录
+        let (cfg, _) = Config::load_lenient();
+        let model_dir = match crate::wakeword::sherpa::resolve_model_dir(
+            &cfg.wakeword.model_dir,
+            &std::path::PathBuf::new(),
+        ) {
+            Some(d) => d,
+            None => {
+                let _ = ah.emit(
+                    "drop-typing://wakeword-tokens",
+                    serde_json::json!({ "error": "模型目录未找到" }),
+                );
+                return;
+            }
+        };
+
+        let t2t = match crate::wakeword::text2token::Text2Token::load(&model_dir) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = ah.emit(
+                    "drop-typing://wakeword-tokens",
+                    serde_json::json!({ "error": format!("text2token 加载失败：{e}") }),
+                );
+                return;
+            }
+        };
+
+        match t2t.convert_batch(&keywords) {
+            Ok(lines) => {
+                let _ = ah.emit(
+                    "drop-typing://wakeword-tokens",
+                    serde_json::json!({ "lines": lines }),
+                );
+            }
+            Err(e) => {
+                let _ = ah.emit(
+                    "drop-typing://wakeword-tokens",
+                    serde_json::json!({ "error": format!("转换失败：{e}") }),
+                );
+            }
+        }
+    });
+
+    // ── 快捷键配置：获取当前配置
+    let ah = app.clone();
+    app.listen("drop-typing://get-shortcut-config", move |_| {
+        eprintln!("[drop-typing] get-shortcut-config received");
+        let (cfg, _) = Config::load_lenient();
+
+        let current = cfg.hotkey_bindings();
+        let defaults = Bindings::platform_default();
+
+        let specs_to_strings = |s: &[KeySpec]| -> Vec<String> {
+            s.iter().map(|ks| ks.to_config_name()).collect()
+        };
+
+        let mouse_to_name = |b: Option<MouseButton>| -> Option<&str> {
+            b.map(|mb| match mb {
+                MouseButton::Forward => "forward",
+                MouseButton::Back => "back",
+            })
+        };
+
+        let has_custom = cfg.hotkey.keyboard.trigger.is_some()
+            || cfg.hotkey.keyboard.repair.is_some()
+            || cfg.hotkey.keyboard.command.is_some()
+            || cfg.hotkey.keyboard.cancel.is_some()
+            || cfg.hotkey.mouse.is_some();
+
+        let _ = ah.emit(
+            "drop-typing://shortcut-config",
+            serde_json::json!({
+                "platform": hotkey::platform_name(),
+                "keyboard": {
+                    "trigger": specs_to_strings(&current.trigger),
+                    "repair":  specs_to_strings(&current.repair),
+                    "command": specs_to_strings(&current.command),
+                    "cancel":  specs_to_strings(&current.cancel),
+                },
+                "mouse": {
+                    "trigger": mouse_to_name(current.mouse.trigger),
+                    "repair":  mouse_to_name(current.mouse.repair),
+                },
+                "defaults": {
+                    "keyboard": {
+                        "trigger": specs_to_strings(&defaults.trigger),
+                        "repair":  specs_to_strings(&defaults.repair),
+                        "command": specs_to_strings(&defaults.command),
+                        "cancel":  specs_to_strings(&defaults.cancel),
+                    },
+                    "mouse": {
+                        "trigger": mouse_to_name(defaults.mouse.trigger),
+                        "repair":  mouse_to_name(defaults.mouse.repair),
+                    },
+                },
+                "has_custom": has_custom,
+            }),
+        );
+    });
+
+    // ── 快捷键配置：保存
+    let ah = app.clone();
+    app.listen("drop-typing://save-shortcut-config", move |ev| {
+        eprintln!("[drop-typing] save-shortcut-config received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+
+        let (mut cfg, _) = Config::load_lenient();
+
+        // 解析键盘段
+        if let Some(kb) = payload.get("keyboard") {
+            let parse_channel = |name: &str| -> Option<Vec<String>> {
+                kb.get(name)
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+            };
+            cfg.hotkey.keyboard.trigger = parse_channel("trigger");
+            cfg.hotkey.keyboard.repair  = parse_channel("repair");
+            cfg.hotkey.keyboard.command = parse_channel("command");
+            cfg.hotkey.keyboard.cancel  = parse_channel("cancel");
+        }
+
+        // 解析鼠标段
+        if let Some(mouse) = payload.get("mouse") {
+            let parse_mouse_button = |name: &str| -> Option<crate::config::MouseButton> {
+                mouse.get(name).and_then(|v| v.as_str()).and_then(|s| match s {
+                    "forward" => Some(crate::config::MouseButton::Forward),
+                    "back" => Some(crate::config::MouseButton::Back),
+                    _ => None,
+                })
+            };
+            let trigger = parse_mouse_button("trigger");
+            let repair  = parse_mouse_button("repair");
+            if trigger.is_some() || repair.is_some() {
+                cfg.hotkey.mouse = Some(MouseHotkeyConfig { trigger, repair });
+            } else {
+                cfg.hotkey.mouse = None;
+            }
+        }
+
+        match cfg.save() {
+            Ok(()) => {
+                eprintln!("[drop-typing] shortcut config saved");
+                let _ = ah.emit(
+                    "drop-typing://shortcut-saved",
+                    serde_json::json!({ "success": true }),
+                );
+            }
+            Err(e) => {
+                eprintln!("[drop-typing] shortcut config save failed: {e}");
+                let _ = ah.emit(
+                    "drop-typing://shortcut-saved",
+                    serde_json::json!({ "success": false, "error": e.to_string() }),
+                );
+            }
+        }
+    });
+
+    // ── 快捷键配置：重置为平台默认值
+    let ah = app.clone();
+    app.listen("drop-typing://reset-shortcut-config", move |_| {
+        eprintln!("[drop-typing] reset-shortcut-config received");
+        let (mut cfg, _) = Config::load_lenient();
+        cfg.hotkey = crate::config::HotkeyConfig::default();
+        match cfg.save() {
+            Ok(()) => {
+                eprintln!("[drop-typing] shortcut config reset to defaults");
+                let _ = ah.emit(
+                    "drop-typing://shortcut-reset",
+                    serde_json::json!({ "success": true }),
+                );
+            }
+            Err(e) => {
+                let _ = ah.emit(
+                    "drop-typing://shortcut-reset",
+                    serde_json::json!({ "success": false, "error": e.to_string() }),
+                );
+            }
+        }
+    });
+    let ah = app.clone();
+    app.listen("drop-typing://restart", move |_| {
+        eprintln!("[drop-typing] restart requested");
+        let exe = std::env::current_exe().unwrap_or_default();
+
+        // 从 executable 路径向上找到 .app 包
+        let app_bundle = {
+            let mut p = exe.clone();
+            // exe 通常在 MyApp.app/Contents/MacOS/binary
+            while p.parent().is_some() {
+                if p.extension().map_or(false, |e| e == "app") {
+                    break;
+                }
+                p = p.parent().unwrap().to_path_buf();
+            }
+            p
+        };
+
+        if app_bundle.extension().map_or(false, |e| e == "app") {
+            eprintln!(
+                "[drop-typing] 重启：open -n {}",
+                app_bundle.display(),
+            );
+            let _ = std::process::Command::new("open")
+                .args(["-n", "-a"])
+                .arg(&app_bundle)
+                .spawn();
+        } else {
+            // 回退：直接启动可执行文件
+            eprintln!(
+                "[drop-typing] 重启：直接启动 {}",
+                exe.display(),
+            );
+            let _ = std::process::Command::new(&exe).spawn();
+        }
+
+        std::process::exit(0);
     });
 }
 

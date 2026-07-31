@@ -12,13 +12,12 @@
 //! 是为了拦截已配置的鼠标侧键事件，阻止其原始行为（如浏览器前进/后退导航）。
 //! 只有匹配 `[hotkey.mouse]` 配置的侧键才会被消费，其余所有事件全部放行。
 
-use std::cell::Cell;
 use std::sync::mpsc;
 
 use anyhow::Result;
 use rdev::{Event, EventType, Key};
 
-use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, MouseButton, MOUSE_DOUBLE_CLICK_MS};
+use super::{Bindings, HotkeyEvent, HotkeySource, KeySpec, MouseButton};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -45,9 +44,6 @@ impl HotkeySource for RdevHotkey {
         std::thread::Builder::new()
             .name("drop-typing-hotkey".into())
             .spawn(move || {
-                // 鼠标左键双击检测：用 Cell 提供内部可变性（grab 回调签名是 Fn）
-                let last_left_press: Cell<Option<std::time::Instant>> = Cell::new(None);
-
                 let result = rdev::grab(move |event: Event| {
                     let ev = match event.event_type {
                         EventType::KeyPress(ref key) => {
@@ -76,19 +72,8 @@ impl HotkeySource for RdevHotkey {
                             }
                         }
                         EventType::ButtonPress(rdev::Button::Left) => {
-                            let now = std::time::Instant::now();
-                            let prev = last_left_press.replace(Some(now));
-                            match prev {
-                                // 双击判定：触发后重置计时，避免三击连发
-                                Some(t)
-                                    if now.duration_since(t).as_millis()
-                                        < MOUSE_DOUBLE_CLICK_MS as u128 =>
-                                {
-                                    last_left_press.set(None);
-                                    Some(HotkeyEvent::MouseDoubleClick)
-                                }
-                                _ => None,
-                            }
+                            // 鼠标双击确认已禁用（冲突太多）
+                            None
                         }
                         // ── 鼠标侧键：独立于键盘，绕过修饰键状态机 ──
                         EventType::ButtonPress(rdev::Button::Forward) => {

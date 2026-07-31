@@ -1,50 +1,61 @@
 //! 唤醒词引擎抽象。
 //!
-//! 使用 sherpa-onnx KeywordSpotter 检测三个内置中文唤醒词（硬编码，不支持自定义）：
+//! 使用 sherpa-onnx KeywordSpotter 检测唤醒词。支持：
+//! - 内置默认唤醒词（DT打/DT修/DT控），通过静态 keywords.txt 加载
+//! - 用户自定义唤醒词（配置文件中的 [[wakeword.keywords]]），通过 text2token 动态生成
 //!
-//! | 唤醒词 | 通道   | 行为 |
-//! |--------|--------|------|
-//! | DT打   | Input  | 说话 → ASR → LLM 清洗 → 追加 |
-//! | DT修   | Repair | 说修正指令 → LLM repair → 替换 |
-//! | DT控   | Command| 说按键名 → 本地解析 → 模拟按键 |
-//!
-//! 启动时直接读模型目录下的 keywords.txt（静态文件），不做动态生成。
+//! 启动逻辑：
+//! 1. 检查用户配置中是否有自定义唤醒词
+//! 2. 有 → 用 text2token 动态生成 token buf → 以此加载 KeywordSpotter
+//! 3. 无 → 从静态 keywords.txt 加载（向后兼容）
 
 pub mod phoneme;
 pub mod sherpa;
+pub mod text2token;
 
 use std::path::Path;
 
+use crate::config::KeywordEntry;
+
 // ── 类型定义 ─────────────────────────────────────────────────────────
 
-/// 三个唤醒词。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WakeWord {
-    /// "DT打" → 录入通道
-    Da,
-    /// "DT修" → 修复通道
-    Xiu,
-    /// "DT控" → 指令通道
-    An,
+/// 一个唤醒词，包含关键词文本和对应动作。
+///
+/// 从配置文件或内置默认值构建。`action` 决定检测后进入的通道：
+/// - `"input"`   → 录音 → ASR → 追加到暂存条
+/// - `"repair"`  → 录音 → ASR → 替换暂存条内容
+/// - `"command"` → 录音 → ASR → 解析为指令执行
+/// - `"commit"`  → 立即提交暂存条到光标处（不录音）
+/// - `"clear"`   → 立即清空暂存条并隐藏（不录音）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WakeWord {
+    /// 自然语言关键词文本（如 "DT打"）
+    pub text: String,
+    /// 检测后进入的通道："input" | "repair" | "command"
+    pub action: String,
 }
 
 impl WakeWord {
     /// 唤醒词自身估计时长（毫秒），用于裁切 RingBuffer。
-    pub fn duration_ms(self) -> u64 {
-        match self {
-            WakeWord::Da => 500,
-            WakeWord::Xiu => 550,
-            WakeWord::An => 450,
+    ///
+    /// 粗略按中文 250ms/字 + 英文 150ms/字母 估算。
+    pub fn duration_ms(&self) -> u64 {
+        let mut ms = 0u64;
+        for ch in self.text.chars() {
+            if ('\u{4E00}'..='\u{9FFF}').contains(&ch) {
+                ms += 250;
+            } else if ch.is_ascii_alphabetic() {
+                ms += 150;
+            } else {
+                ms += 100;
+            }
         }
+        ms.clamp(300, 1200)
     }
 
     /// 显示名（暂存条状态徽章用）。
-    pub fn display_name(self) -> &'static str {
-        match self {
-            WakeWord::Da => "DT打",
-            WakeWord::Xiu => "DT修",
-            WakeWord::An => "DT控",
-        }
+    pub fn display_name(&self) -> &str {
+        &self.text
     }
 }
 
@@ -62,13 +73,65 @@ pub enum WakeEvent {
     },
 }
 
+// ── 内置默认值 ─────────────────────────────────────────────────────────
+
+/// 三个内置默认唤醒词（用户未自定义时使用）。
+const BUILTIN_DEFAULTS: &[(&str, &str)] = &[
+    ("DT打", "input"),
+    ("DT修", "repair"),
+    ("DT控", "command"),
+    ("DT确认", "commit"),
+    ("DT清空", "clear"),
+];
+
+// ── 关键词列表构建 ─────────────────────────────────────────────────────
+
+/// 根据配置决定关键词列表。
+///
+/// 返回 `(keyword_map, use_dynamic)`：
+/// - `keyword_map`：`[(keyword_text, WakeWord)]` 列表，供 SherpaKws 加载
+/// - `use_dynamic`：`true` 表示需要 text2token 动态生成 token，`false` 表示用静态 keywords.txt
+pub fn resolve_keywords(cfg: &crate::config::WakewordConfig) -> (Vec<(String, WakeWord)>, bool) {
+    if !cfg.keywords.is_empty() {
+        let map: Vec<(String, WakeWord)> = cfg
+            .keywords
+            .iter()
+            .map(|e: &KeywordEntry| {
+                (
+                    e.keyword.clone(),
+                    WakeWord {
+                        text: e.keyword.clone(),
+                        action: e.action.clone(),
+                    },
+                )
+            })
+            .collect();
+        (map, true)
+    } else {
+        let map: Vec<(String, WakeWord)> = BUILTIN_DEFAULTS
+            .iter()
+            .map(|(text, action)| {
+                (
+                    text.to_string(),
+                    WakeWord {
+                        text: text.to_string(),
+                        action: action.to_string(),
+                    },
+                )
+            })
+            .collect();
+        // 内置默认值也走 text2token 动态路径（含 DT确认/DT清空 等）
+        (map, true)
+    }
+}
+
 // ── 工厂 ─────────────────────────────────────────────────────────────
 
 /// 尝试创建 sherpa-onnx 唤醒词引擎。
 ///
 /// 流程：
 /// 1. 解析模型目录
-/// 2. 写入 keywords.txt（仅当文件缺失时，使用硬编码默认值）
+/// 2. 根据用户配置决定关键词来源（动态生成 vs 静态文件）
 /// 3. 加载 KeywordSpotter
 ///
 /// 加载失败时返回 `None`（优雅降级，热键仍然可用）。
@@ -89,26 +152,68 @@ pub fn create_engine(
         }
     };
 
-    // 硬编码关键词：DT打/DT修/DT控
-    let keyword_map = phoneme::default_keyword_map();
+    let (keyword_map, use_dynamic) = resolve_keywords(cfg);
 
-    // 加载模型（keywords.txt 已预置在模型目录中）
-    match sherpa::SherpaKws::load(
-        &model_dir,
-        &keyword_map,
-        cfg.keywords_threshold,
-        cfg.keywords_score,
-    ) {
-        Ok(engine) => {
-            eprintln!(
-                "[drop-typing] 唤醒词（sherpa-onnx）：已加载 {} 个关键词（DT打/DT修/DT控）",
-                keyword_map.len(),
-            );
-            Some(engine)
+    if use_dynamic {
+        // 用户自定义关键词 → text2token 动态生成 token buf
+        let t2t = match text2token::Text2Token::load(&model_dir) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[drop-typing] 唤醒词：text2token 加载失败：{e}");
+                return None;
+            }
+        };
+
+        let items: Vec<(String, String)> = keyword_map
+            .iter()
+            .map(|(text, ww)| (text.clone(), ww.text.clone()))
+            .collect();
+
+        match t2t.convert_batch(&items) {
+            Ok(lines) => {
+                let keywords_buf = lines.join("\n");
+                eprintln!(
+                    "[drop-typing] 唤醒词：从用户配置动态生成 {} 个关键词",
+                    items.len(),
+                );
+                for (i, line) in lines.iter().enumerate() {
+                    eprintln!("[drop-typing]   [{i}] {line}");
+                }
+                match sherpa::SherpaKws::load_with_buf(
+                    &model_dir,
+                    &keyword_map,
+                    &keywords_buf,
+                    cfg.keywords_threshold,
+                    cfg.keywords_score,
+                ) {
+                    Ok(engine) => Some(engine),
+                    Err(e) => {
+                        eprintln!("[drop-typing] 唤醒词：动态加载失败：{e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[drop-typing] 唤醒词：text2token 转换失败：{e}");
+                None
+            }
         }
-        Err(e) => {
-            eprintln!("[drop-typing] 唤醒词：加载失败：{e}");
-            None
+    } else {
+        eprintln!(
+            "[drop-typing] 唤醒词：从默认 keywords.txt 加载 {} 个关键词",
+            keyword_map.len(),
+        );
+        match sherpa::SherpaKws::load(
+            &model_dir,
+            &keyword_map,
+            cfg.keywords_threshold,
+            cfg.keywords_score,
+        ) {
+            Ok(engine) => Some(engine),
+            Err(e) => {
+                eprintln!("[drop-typing] 唤醒词：加载失败：{e}");
+                None
+            }
         }
     }
 }

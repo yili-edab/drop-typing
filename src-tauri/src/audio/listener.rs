@@ -337,7 +337,33 @@ impl ContinuousListener {
             .spawn(move || {
                 let mut stream = kws.create_stream();
                 let mut next_frame_start: u64 = 0;
+
+                // 去抖：首次检测后启动固定窗口，窗口内持续收集更长的关键词，
+                // 到期后发送窗口内最长的那个。不重置计时器以保证延迟一致。
+                let mut pending_word: Option<WakeWord> = None;
+                let mut pending_position: u64 = 0;
+                let mut pending_since: Option<std::time::Instant> = None;
+                const DEBOUNCE_MS: u64 = 800; // 固定去抖窗口
+
                 loop {
+                    // 去抖窗口到期 → 发送收集到的最长关键词
+                    if let (Some(ref pw), Some(since)) = (&pending_word, pending_since) {
+                        if since.elapsed().as_millis() as u64 >= DEBOUNCE_MS {
+                            let _ = tx.send(WakeEvent::Detected {
+                                word: pw.clone(),
+                                position: pending_position,
+                            });
+                            eprintln!(
+                                "[drop-typing] 唤醒词去抖完成，发送：'{}' action='{}'",
+                                pw.text, pw.action,
+                            );
+                            next_frame_start = pending_position + TARGET_RATE as u64;
+                            pending_word = None;
+                            pending_since = None;
+                            kws.reset(&mut stream);
+                            continue;
+                        }
+                    }
                     // 等待足够数据
                     let current = buffer.position();
                     let needed = next_frame_start + frame_samples as u64;
@@ -359,14 +385,37 @@ impl ContinuousListener {
 
                     // sherpa-onnx 流式推理
                     if let Some(word) = kws.process_frame(&mut stream, &frame) {
-                        let _ = tx.send(WakeEvent::Detected {
-                            word,
-                            position: needed,
-                        });
-                        // 冷却期：检测到后跳过 ~1 秒（16 帧），
-                        // 避免同一句唤醒词被重复触发
-                        next_frame_start = needed + TARGET_RATE as u64; // 1 秒 = 16000 采样
-                        // 重置 stream（已在 process_frame 内部 reset）
+                        match &pending_word {
+                            Some(prev) if word.text.len() > prev.text.len() => {
+                                eprintln!(
+                                    "[drop-typing] 唤醒词去抖更新：'{}' → '{}'（{:.0}ms）",
+                                    prev.text, word.text,
+                                    pending_since.unwrap().elapsed().as_millis(),
+                                );
+                                pending_word = Some(word.clone());
+                                pending_position = needed;
+                                // 不重置 pending_since，保证总延迟固定
+                                kws.reset(&mut stream);
+                            }
+                            Some(prev) => {
+                                eprintln!(
+                                    "[drop-typing] 唤醒词去抖忽略：'{}'（不长于'{}'）",
+                                    word.text, prev.text,
+                                );
+                                kws.reset(&mut stream);
+                            }
+                            None => {
+                                eprintln!(
+                                    "[drop-typing] 唤醒词去抖启动：'{}' action='{}'",
+                                    word.text, word.action,
+                                );
+                                pending_word = Some(word.clone());
+                                pending_position = needed;
+                                pending_since = Some(std::time::Instant::now());
+                                kws.reset(&mut stream);
+                            }
+                        }
+                        next_frame_start = needed;
                         continue;
                     }
 
@@ -375,7 +424,6 @@ impl ContinuousListener {
                     // 检查是否需要跳过（追赶上实时）
                     let lag = buffer.position().saturating_sub(next_frame_start);
                     if lag > frame_samples as u64 * 2 {
-                        // 落后超过 2 帧——跳过中间帧赶上实时
                         next_frame_start =
                             buffer.position().saturating_sub(frame_samples as u64);
                     }
