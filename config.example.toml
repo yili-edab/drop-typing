@@ -55,6 +55,43 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # 该按键；倒计时期间按下任意右修饰键（开始新录音）可取消执行。
 # command_countdown_ms = 2000
 
+# ── 唤醒词（sherpa-onnx KeywordSpotter）────────────────────────────
+#
+# 开启后应用持续监听麦克风，通过唤醒词免提触发语音输入。
+# 使用 sherpa-onnx Zipformer Transducer KWS 模型，内建特征提取，
+# 无需自行训练模型或维护 Mel 特征提取代码。
+#
+# ⚠️ macOS 限制：麦克风持续开流会导致菜单栏橙色指示灯常亮。
+#    本功能仅用于验证语音交互体验，非长期使用方案。
+#
+# 预训练模型下载（中英双语，约 3.3MB）：
+#   https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2
+#
+# 放在 src-tauri/models/builtin/ 目录下，首次启动自动加载。
+# 也可用 model_dir 指定文件系统路径。
+
+# [wakeword]
+# enabled = true
+# model_dir = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"  # 内置模型目录名
+# keywords_threshold = 0.25       # 检测阈值（默认 0.25，越低越灵敏但误触高）
+# keywords_score = 1.0            # 唤醒词 score boost
+# silence_timeout_ms = 1500       # 唤醒后静音判定录音结束
+# pre_roll_ms = 500               # 唤醒词前保留的音频时长
+# ring_buffer_duration_ms = 3000  # 环形缓冲区时长
+#
+# # 自定义唤醒词列表（缺省时使用内置默认值 DT打/DT修/DT控）
+# [[wakeword.keywords]]
+# keyword = "DT打"               # 自然语言关键词
+# action = "input"                # → 录入通道
+#
+# [[wakeword.keywords]]
+# keyword = "DT修"
+# action = "repair"               # → 修复通道
+#
+# [[wakeword.keywords]]
+# keyword = "DT控"
+# action = "command"              # → 指令通道
+
 # -----------------------------------------------------------
 # 快捷键自定义（可选，未配置时使用平台默认值）
 #

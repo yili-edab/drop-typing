@@ -28,6 +28,7 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 cpal = "0.15"
 hound = "3.5"
+sherpa-onnx = "1.13"
 # 以下三个 crate 跨平台（macOS + Windows 均可用），放在通用依赖中
 rdev = "0.5"
 enigo = "0.2"

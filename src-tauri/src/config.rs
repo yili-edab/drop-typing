@@ -91,7 +91,95 @@ pub struct CommandConfig {
     pub homophone: Vec<CommandHomophoneEntry>,
 }
 
-// Modifier 自定义 Deserialize：接受大小写不敏感 + 历史别名。
+// ── 唤醒词配置类型 ──────────────────────────────────────────────────
+
+/// 单个唤醒词条目。
+///
+/// `keyword` 为自然语言关键词（如 "DT 打"），
+/// `action` 为检测到后进入的通道。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct KeywordEntry {
+    /// 自然语言关键词（如 "DT 打"、"DT 修"）
+    pub keyword: String,
+    /// 检测到后进入的通道："input" | "repair" | "command"
+    pub action: String,
+}
+
+// ── 唤醒词总配置 ────────────────────────────────────────────────────
+
+/// 唤醒词配置（sherpa-onnx KeywordSpotter）。
+///
+/// `enabled = true` 时启动持续监听 + 唤醒词检测。
+/// 无有效模型时自动降级为仅热键模式。
+///
+/// sherpa-onnx 原生支持一个模型 + 多个 keywords，
+/// 不再区分 multi/single 模式。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WakewordConfig {
+    /// 是否开启唤醒词（默认 false）
+    #[serde(default)]
+    pub enabled: bool,
+    /// 模型目录名或文件系统路径（默认 "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"）
+    #[serde(default = "default_model_dir")]
+    pub model_dir: String,
+    /// 自定义唤醒词列表（决定哪些关键词触发哪个通道）
+    #[serde(default)]
+    pub keywords: Vec<KeywordEntry>,
+    /// sherpa-onnx 检测阈值（全局，默认 0.25）
+    #[serde(default = "default_keywords_threshold")]
+    pub keywords_threshold: f32,
+    /// 唤醒词 score boost（默认 1.0）
+    #[serde(default = "default_keywords_score")]
+    pub keywords_score: f32,
+    /// 唤醒后多久静音判定录音结束（毫秒，默认 1500）
+    #[serde(default = "default_silence_timeout")]
+    pub silence_timeout_ms: u64,
+    /// 唤醒词前保留的音频时长（毫秒，默认 500）
+    #[serde(default = "default_pre_roll")]
+    pub pre_roll_ms: u64,
+    /// 环形缓冲区时长（毫秒，默认 3000）
+    #[serde(default = "default_ring_buffer_duration")]
+    pub ring_buffer_duration_ms: u64,
+}
+
+fn default_model_dir() -> String {
+    "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20".to_string()
+}
+
+fn default_keywords_threshold() -> f32 {
+    0.25
+}
+
+fn default_keywords_score() -> f32 {
+    1.0
+}
+
+fn default_silence_timeout() -> u64 {
+    1500
+}
+
+fn default_pre_roll() -> u64 {
+    500
+}
+
+fn default_ring_buffer_duration() -> u64 {
+    3000
+}
+
+impl Default for WakewordConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_dir: default_model_dir(),
+            keywords: Vec::new(),
+            keywords_threshold: default_keywords_threshold(),
+            keywords_score: default_keywords_score(),
+            silence_timeout_ms: default_silence_timeout(),
+            pre_roll_ms: default_pre_roll(),
+            ring_buffer_duration_ms: default_ring_buffer_duration(),
+        }
+    }
+}
 // 文档推荐只用 Cmd / Ctrl / Opt / Shift，但代码兼容所有写法。
 impl<'de> Deserialize<'de> for Modifier {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -327,6 +415,9 @@ pub struct Config {
     /// 快捷键配置（缺省使用平台默认值）
     #[serde(default)]
     pub hotkey: HotkeyConfig,
+    /// 唤醒词（缺省关闭）
+    #[serde(default)]
+    pub wakeword: WakewordConfig,
     /// 旧版（M1）顶层 Key，向后兼容
     #[serde(default)]
     pub dashscope_api_key: Option<String>,
@@ -356,6 +447,7 @@ impl Default for Config {
             command_countdown_ms: default_command_countdown(),
             command: CommandConfig::default(),
             hotkey: HotkeyConfig::default(),
+            wakeword: WakewordConfig::default(),
         }
     }
 }

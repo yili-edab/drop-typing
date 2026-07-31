@@ -24,6 +24,7 @@ pub mod pipeline;
 pub mod prompts;
 pub mod settings;
 pub mod staging;
+pub mod wakeword;
 
 use staging::{MAX_HEIGHT, WIN_WIDTH};
 use tauri::{WebviewUrl, WebviewWindowBuilder};

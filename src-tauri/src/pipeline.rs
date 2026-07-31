@@ -20,10 +20,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow;
-use tauri::{AppHandle, Listener};
+use tauri::{AppHandle, Listener, Manager};
 
 use crate::asr::{self, AsrBackend, RealtimeSession};
-use crate::audio::AudioRecorder;
+use crate::audio::{AudioRecorder, ContinuousListener, RingBuffer, TailReader};
 use crate::command;
 use crate::config::Config;
 use crate::hotkey::{self, HotkeyEvent};
@@ -32,10 +32,11 @@ use crate::llm::{self, TextCleaner};
 use crate::prompts;
 use crate::settings;
 use crate::staging::Staging;
+use crate::wakeword::{self, WakeEvent, WakeWord};
 
 /// 录音目的：输入通道（右 ⌘）、修正通道（右 ⌥）还是指令通道（右 ⇧，M4）。
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum RecordMode {
+pub(crate) enum RecordMode {
     Input,
     Repair,
     Command,
@@ -53,6 +54,8 @@ impl RecordMode {
 
 enum State {
     Idle,
+    /// 持续监听中（唤醒词启用时）。等待 HotkeyEvent 或 WakeEvent。
+    Listening,
     Recording {
         started: Instant,
         tainted: bool,
@@ -69,6 +72,10 @@ enum State {
         pending_rx: Option<mpsc::Receiver<anyhow::Result<Arc<dyn RealtimeSession>>>>,
         /// 录音是否由鼠标侧键启动（用于跨设备 taint 判定）
         started_by_mouse: bool,
+        /// 唤醒词触发（None = 热键触发）
+        wake_word: Option<WakeWord>,
+        /// 唤醒词录音的 ASR 结果接收端
+        wake_finish_rx: Option<mpsc::Receiver<anyhow::Result<String>>>,
     },
     /// 输入通道短按后等待判定：超时则单击提交，窗口内再次短按则双击清空
     PendingCommit { since: Instant },
@@ -131,8 +138,47 @@ pub fn start(app: AppHandle) {
         }
     });
 
+    // 唤醒词（Phase 1）
+    let (wake_buffer, wake_rx) = 'wake: {
+        if !cfg.wakeword.enabled {
+            break 'wake (None, None);
+        }
+        let resource_dir = match app.path().resource_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("[drop-typing] 唤醒词：无法获取资源目录：{e}");
+                break 'wake (None, None);
+            }
+        };
+
+        match ContinuousListener::new(cfg.wakeword.ring_buffer_duration_ms) {
+            Ok(listener) => {
+                let engine = wakeword::create_engine(&cfg.wakeword, &resource_dir);
+                if let Some(eng) = engine {
+                    let buf = listener.buffer.clone();
+                    let rx = ContinuousListener::start_wake_word(
+                        buf.clone(),
+                        eng,
+                    );
+                    // listener 必须存活以保持 cpal 流不关闭；leak 到整个进程生命周期
+                    let _ = Box::leak(Box::new(listener));
+                    (Some(buf), Some(rx))
+                } else {
+                    (None, None)
+                }
+            }
+            Err(e) => {
+                eprintln!("[drop-typing] 唤醒词监听器启动失败：{e}");
+                (None, None)
+            }
+        }
+    };
+
     std::thread::spawn(move || {
-        run_loop(cfg, backend, cleaner, injector, staging, rx, lexicon, current_style);
+        run_loop(
+            cfg, backend, cleaner, injector, staging, rx, lexicon, current_style,
+            wake_buffer, wake_rx,
+        );
     });
 }
 
@@ -145,6 +191,8 @@ fn run_loop(
     rx: mpsc::Receiver<HotkeyEvent>,
     lexicon: Arc<command::Lexicon>,
     current_style: Arc<Mutex<Option<String>>>,
+    wake_buffer: Option<Arc<RingBuffer>>,
+    wake_rx: Option<mpsc::Receiver<WakeEvent>>,
 ) {
     let recorder = match AudioRecorder::new() {
         Ok(r) => Some(r),
@@ -155,7 +203,14 @@ fn run_loop(
     };
     let backend = backend.map(Arc::new);
 
-    let mut state = State::Idle;
+    let mut state = if wake_buffer.is_some() && wake_rx.is_some() {
+        State::Listening
+    } else {
+        State::Idle
+    };
+    // 唤醒词资源（独立于 State enum，方便跨状态保留）
+    let wake_buffer: Option<Arc<RingBuffer>> = wake_buffer;
+    let wake_rx: Option<mpsc::Receiver<WakeEvent>> = wake_rx;
     let threshold = Duration::from_millis(cfg.long_press_threshold_ms);
     let poll_interval = Duration::from_millis(50); // 轮询阈值到期
     let double_press = Duration::from_millis(cfg.double_press_window_ms); // 双击窗口（可配置）
@@ -164,11 +219,20 @@ fn run_loop(
     // 指令代次：每次新录音/新指令 bump，倒计时线程执行前比对，防串台
     let command_gen = Arc::new(AtomicU64::new(0));
 
+    // 返回应当的"空闲"态：唤醒词启用时返回 Listening，否则 Idle。
+    let idle_state = || {
+        if wake_buffer.is_some() && wake_rx.is_some() {
+            State::Listening
+        } else {
+            State::Idle
+        }
+    };
+
     loop {
         match rx.recv_timeout(poll_interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // 按住期间：超阈值才显示暂存条（避免短按一闪而过），然后设"识别中"
-                if let State::Recording { started, mode, bar_shown, .. } = &mut state {
+                if let State::Recording { started, mode, bar_shown, wake_finish_rx, .. } = &mut state {
                     if started.elapsed() >= threshold {
                         if !*bar_shown {
                             staging.show();
@@ -177,12 +241,47 @@ fn run_loop(
                         staging.set_busy(true);
                         staging.set_status(mode.recognizing_label());
                     }
+                    // 唤醒词录音：轮询 ASR 结果
+                    if let Some(ref rx) = wake_finish_rx {
+                        if let Ok(result) = rx.try_recv() {
+                            handle_wake_result(
+                                &staging, &cleaner, &injector, result,
+                                *mode, command_countdown, &command_gen,
+                                &lexicon, &current_style,
+                            );
+                            staging.set_recording(false);
+                            staging.set_busy(false);
+                            state = if wake_buffer.is_some() && wake_rx.is_some() {
+                                State::Listening
+                            } else {
+                                State::Idle
+                            };
+                            continue;
+                        }
+                    }
                 }
                 // PendingCommit 超时未等到第二击 → 确认单击，提交
                 if let State::PendingCommit { since } = &state {
                     if since.elapsed() >= double_press {
                         commit(&staging, injector.as_ref());
-                        state = State::Idle;
+                        state = idle_state();
+                    }
+                }
+                // Listening 态下轮询唤醒词事件
+                if let State::Listening = &state {
+                    if let Some(ref buffer) = wake_buffer {
+                        if let Some(ref wrx) = wake_rx {
+                            if let Ok(event) = wrx.try_recv() {
+                                let WakeEvent::Detected { word, position } = event;
+                                start_wake_recording(
+                                        &staging, &recorder, &cfg, &backend,
+                                        buffer, word, position,
+                                        &cleaner, &injector, command_countdown,
+                                        &command_gen, &lexicon, &current_style,
+                                        &mut state,
+                                    );
+                            }
+                        }
                     }
                 }
                 continue;
@@ -208,7 +307,11 @@ fn run_loop(
                 staging.clear_command();
                 staging.clear_error();
                 staging.hide();
-                state = State::Idle;
+                state = if wake_buffer.is_some() && wake_rx.is_some() {
+                    State::Listening
+                } else {
+                    State::Idle
+                };
             }
 
             HotkeyEvent::MouseDoubleClick => {
@@ -223,14 +326,14 @@ fn run_loop(
                     if staging.text().trim().is_empty() {
                         staging.hide();
                     }
-                    state = State::Idle;
+                    state = idle_state();
                     continue;
                 }
                 // 暂存条无内容：零副作用
                 if staging.text().trim().is_empty() {
                     continue;
                 }
-                state = State::Idle; // 取消 PendingCommit 待定
+                state = idle_state(); // 取消 PendingCommit 待定
                 // 取消尚未执行的指令倒计时，防止粘贴后倒计时按键打进输入框
                 command_gen.fetch_add(1, Ordering::SeqCst);
                 // 双击会在目标输入框选中一个单词，先按 → 折叠选区，
@@ -256,7 +359,11 @@ fn run_loop(
                 // 若已在录音中 → 根据来源决定行为
                 let carry_pending = match &state {
                     State::PendingCommit { since } => Some(*since),
-                    State::Recording { started_by_mouse, .. } => {
+                    State::Recording { started_by_mouse, wake_word, .. } => {
+                        // 唤醒词录音中：忽略热键（录音由静音检测结束）
+                        if wake_word.is_some() {
+                            continue;
+                        }
                         // 键盘事件到达鼠标录音 → 忽略，不 taint
                         if *started_by_mouse {
                             continue;
@@ -268,6 +375,7 @@ fn run_loop(
                         continue;
                     }
                     State::Idle => None,
+                    State::Listening => None,
                 };
 
                 let mode = match ev {
@@ -373,6 +481,8 @@ fn run_loop(
                     session,
                     pending_rx,
                     started_by_mouse: false,  // 键盘启动
+                    wake_word: None,
+                    wake_finish_rx: None,
                 };
             }
 
@@ -380,7 +490,11 @@ fn run_loop(
                     // 鼠标侧键事件。若已在键盘录音中 → 忽略，不 taint
                     let carry_pending = match &state {
                         State::PendingCommit { since } => Some(*since),
-                        State::Recording { started_by_mouse, .. } => {
+                        State::Recording { started_by_mouse, wake_word, .. } => {
+                            // 唤醒词录音中：忽略鼠标事件
+                            if wake_word.is_some() {
+                                continue;
+                            }
                             if !*started_by_mouse {
                                 // 鼠标事件到达键盘录音 → 忽略
                                 continue;
@@ -392,6 +506,7 @@ fn run_loop(
                             continue;
                         }
                         State::Idle => None,
+                        State::Listening => None,
                     };
 
                     // 鼠标不支持 command 通道，RepairDown → RecordMode::Repair，
@@ -491,6 +606,8 @@ fn run_loop(
                         session,
                         pending_rx,
                         started_by_mouse: true,  // 鼠标启动
+                        wake_word: None,
+                    wake_finish_rx: None,
                     };
                 }
 
@@ -505,12 +622,14 @@ fn run_loop(
                     pending_since,
                     session,
                     pending_rx,
+                    wake_word: _,
+                    wake_finish_rx: _,
                     started_by_mouse: _,
                 } = state
                 else {
                     continue;
                 };
-                state = State::Idle;
+                state = idle_state();
                 staging.set_recording(false);
 
                 let Some(r) = &recorder else { continue };
@@ -658,12 +777,14 @@ fn run_loop(
                     pending_since,
                     session,
                     pending_rx,
+                    wake_word: _,
+                    wake_finish_rx: _,
                     started_by_mouse: _,
                 } = state
                 else {
                     continue;
                 };
-                state = State::Idle;
+                state = idle_state();
                 staging.set_recording(false);
 
                 let Some(r) = &recorder else { continue };
@@ -814,6 +935,259 @@ fn run_loop(
             }, // match ev
         } // match recv_timeout
     } // loop
+}
+
+// ── 唤醒词 → RecordMode 映射 ────────────────────────────────────────
+
+fn wake_word_to_mode(word: WakeWord) -> RecordMode {
+    match word {
+        WakeWord::Da => RecordMode::Input,
+        WakeWord::Xiu => RecordMode::Repair,
+        WakeWord::An => RecordMode::Command,
+    }
+}
+
+// ── 唤醒词触发录音 ────────────────────────────────────────────────────
+
+/// 唤醒词检测到后：从 RingBuffer 中裁取音频喂给 ASR。
+///
+/// 创建 TailReader 从 `position - pre_roll_samples` 开始读取，
+/// 在后台线程中持续读取 PCM → 送入 RealtimeSession → 静音检测 → finish。
+#[allow(clippy::too_many_arguments)]
+fn start_wake_recording(
+    staging: &Staging,
+    _recorder: &Option<AudioRecorder>,
+    cfg: &Config,
+    backend: &Option<Arc<AsrBackend>>,
+    buffer: &Arc<RingBuffer>,
+    word: WakeWord,
+    position: u64,
+    _cleaner: &Option<Arc<dyn TextCleaner>>,
+    _injector: &Arc<dyn Injector>,
+    _command_countdown: Duration,
+    _command_gen: &Arc<AtomicU64>,
+    _lexicon: &Arc<command::Lexicon>,
+    _current_style: &Arc<Mutex<Option<String>>>,
+    state: &mut State,
+) {
+    let mode = wake_word_to_mode(word);
+    let sample_rate: u64 = 16_000;
+    let pre_roll_samples = cfg.wakeword.pre_roll_ms * sample_rate / 1000;
+    let silence_samples = cfg.wakeword.silence_timeout_ms * sample_rate / 1000;
+    // 唤醒词自身的采样数
+    let _wake_word_samples = word.duration_ms() * sample_rate / 1000;
+
+    // 从唤醒词结束位置往前 pre_roll 开始读（唤醒词之前的上下文 + 唤醒词后的内容）
+    let read_from = position.saturating_sub(pre_roll_samples);
+
+    let backend = match backend {
+        Some(b) => b.clone(),
+        None => {
+            staging.error("未配置 ASR API Key，无法转写。");
+            return;
+        }
+    };
+
+    // 仅支持实时后端（批量路径较复杂，Phase 1 暂不处理）
+    let provider = match backend.as_ref() {
+        AsrBackend::Realtime(p) => p.clone(),
+        _ => {
+            staging.error("唤醒词仅支持实时 ASR 后端。");
+            return;
+        }
+    };
+
+    // 清除上次录音的中间结果
+    staging.partial("");
+    staging.set_repair_note("");
+    staging.clear_command();
+    staging.clear_error();
+
+    // 显示暂存条 + 状态徽章
+    staging.show();
+    let display = word.display_name();
+    staging.set_status(&format!("{display} ✓"));
+
+    // 创建 PCM 通道（TailReader → PCM → ASR session）
+    let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
+
+    // 部分结果回调
+    let (ptx, prx) = mpsc::channel::<String>();
+    let st = staging.clone();
+    let wake_mode = mode;
+    std::thread::spawn(move || {
+        for text in prx {
+            match wake_mode {
+                RecordMode::Input | RecordMode::Command => st.partial(&text),
+                RecordMode::Repair => st.set_repair_note(&text),
+            }
+        }
+    });
+
+    // 音频转发器：缓冲 TailReader 数据，等会话就绪后补发 + 续传
+    let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
+    std::thread::spawn(move || {
+        let mut buf: Vec<Vec<u8>> = Vec::new();
+        let mut sess: Option<Arc<dyn RealtimeSession>> = None;
+        loop {
+            if sess.is_none() {
+                if let Ok(s) = fwd_rx.try_recv() {
+                    for chunk in buf.drain(..) {
+                        if s.send_audio(&chunk).is_err() {
+                            return;
+                        }
+                    }
+                    sess = Some(s);
+                }
+            }
+            match pcm_rx.recv() {
+                Ok(chunk) => {
+                    if let Some(ref s) = sess {
+                        if s.send_audio(&chunk).is_err() {
+                            return;
+                        }
+                    } else {
+                        buf.push(chunk);
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    });
+
+    // 后台建连
+    let (sess_tx, sess_rx) = mpsc::channel();
+    {
+        let p = provider.clone();
+        std::thread::spawn(move || {
+            let result: anyhow::Result<Arc<dyn RealtimeSession>> =
+                p.start_session(ptx).map(|s| Arc::from(s));
+            if let Ok(ref s) = result {
+                let _ = fwd_tx.send(s.clone());
+            }
+            let _ = sess_tx.send(result);
+        });
+    }
+
+    // TailReader → PCM 线程（含静音检测）
+    let mut tail = TailReader::new(buffer.clone(), read_from);
+    let (finish_tx, finish_rx) = mpsc::channel::<anyhow::Result<String>>();
+    std::thread::Builder::new()
+        .name("drop-typing-wake-audio".into())
+        .spawn(move || {
+            let mut silence_count: u64 = 0;
+            // 静音能量阈值（RMS）：经验值，f32 归一化后的典型静音 RMS < 0.01
+            const SILENCE_RMS_THRESHOLD: f32 = 0.02;
+            let silence_max = silence_samples;
+
+            loop {
+                let samples = tail.read_available();
+                if !samples.is_empty() {
+                    // 计算 RMS
+                    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+                    let rms = (sum_sq / samples.len() as f32).sqrt();
+
+                    // f32 → s16le PCM
+                    let mut bytes = Vec::with_capacity(samples.len() * 2);
+                    for s in &samples {
+                        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                        bytes.extend_from_slice(&v.to_le_bytes());
+                    }
+
+                    if pcm_tx.send(bytes).is_err() {
+                        // 接收端已关闭（session 结束）
+                        break;
+                    }
+
+                    if rms < SILENCE_RMS_THRESHOLD {
+                        silence_count += samples.len() as u64;
+                    } else {
+                        silence_count = 0;
+                    }
+                }
+
+                if silence_count >= silence_max {
+                    break;
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+
+            drop(pcm_tx); // 通知音频转发器结束
+            // 等待 session 完成（通过 sess_rx），然后 finish
+            let result = match sess_rx.recv() {
+                Ok(Ok(session)) => session.finish(),
+                Ok(Err(e)) => Err(anyhow::anyhow!("ASR 会话建立失败：{e:#}")),
+                Err(_) => Err(anyhow::anyhow!("ASR 会话建立超时")),
+            };
+            let _ = finish_tx.send(result);
+        })
+        .expect("启动唤醒词音频线程失败");
+
+    staging.set_recording(true);
+    staging.set_busy(true);
+    staging.set_status(mode.recognizing_label());
+
+    *state = State::Recording {
+        started: Instant::now(),
+        tainted: false,
+        mode,
+        bar_shown: true,
+        dismiss_only: false,
+        pending_since: None,
+        session: None,
+        pending_rx: None,
+        started_by_mouse: false,
+        wake_word: Some(word),
+        wake_finish_rx: Some(finish_rx),
+    };
+}
+
+/// 处理唤醒词录音的 ASR 结果（与热键松手路径相同）。
+fn handle_wake_result(
+    staging: &Staging,
+    cleaner: &Option<Arc<dyn TextCleaner>>,
+    injector: &Arc<dyn Injector>,
+    result: anyhow::Result<String>,
+    mode: RecordMode,
+    command_countdown: Duration,
+    command_gen: &Arc<AtomicU64>,
+    lexicon: &Arc<command::Lexicon>,
+    current_style: &Arc<Mutex<Option<String>>>,
+) {
+    match result {
+        Ok(text) if !text.trim().is_empty() => {
+            match mode {
+                RecordMode::Input => {
+                    let pc = prompts::load_prompts();
+                    let prompt = {
+                        let style = current_style.lock().unwrap().clone();
+                        prompts::effective_clean_prompt(&pc, style.as_deref())
+                    };
+                    clean_and_append(staging, cleaner, text.trim(), &prompt)
+                }
+                RecordMode::Repair => {
+                    repair_and_replace(staging, cleaner, text.trim())
+                }
+                RecordMode::Command => run_command(
+                    staging,
+                    injector,
+                    text.trim(),
+                    command_countdown,
+                    command_gen,
+                    lexicon,
+                ),
+            }
+        }
+        Ok(_) => {
+            staging.set_status("");
+            staging.error("ASR 返回空文本")
+        }
+        Err(e) => {
+            staging.set_status("");
+            staging.error(&format!("ASR 失败：{e}"))
+        }
+    }
 }
 
 /// 短按提交：暂存条 → 剪贴板 → Cmd+V → 恢复剪贴板 → 清空暂存条
