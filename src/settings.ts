@@ -1337,8 +1337,7 @@ listen<any>('drop-typing://wakeword-saved', (e) => {
   btnWakewordSave.textContent = '保存';
   btnWakewordSave.disabled = false;
   if (e.payload.success) {
-    toast('success', '唤醒词配置已保存');
-    promptRestart('唤醒词配置需要重启应用后才能生效，是否立即重启？');
+    toast('success', '唤醒词配置已保存并立即生效');
   } else {
     toast('danger', e.payload.error || '保存失败');
   }
@@ -1351,7 +1350,7 @@ listen<any>('drop-typing://wakeword-reset', (e) => {
       action: k.action,
     }));
     renderWakewordList();
-    toast('success', '已重置为默认值。请重启应用使配置生效。');
+    toast('success', '已重置为默认值并生效');
   } else {
     toast('danger', e.payload.error || '重置失败');
   }
@@ -1813,7 +1812,7 @@ listen<any>('drop-typing://config-file-saved', (e) => {
     requestGeneralConfig();
     requestCommandConfig();
     if (e.payload.restart_required) {
-      promptRestart('配置中热键或唤醒词设置已变化，需要重启应用后才能生效，是否立即重启？');
+      promptRestart('配置中热键设置已变化，需要重启应用后才能生效，是否立即重启？');
     }
   } else {
     toast('danger', e.payload.error || '保存失败');

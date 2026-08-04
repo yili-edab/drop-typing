@@ -466,6 +466,8 @@ pub fn register_settings_handlers(app: &AppHandle) {
                     "drop-typing://wakeword-saved",
                     serde_json::json!({ "success": true }),
                 );
+                // 唤醒词已支持热切换：通知 pipeline 重建/停止麦克风监听
+                let _ = ah.emit("drop-typing://runtime-reload", serde_json::json!({}));
             }
             Err(e) => {
                 eprintln!("[drop-typing] wakeword config save failed: {e}");
@@ -490,6 +492,7 @@ pub fn register_settings_handlers(app: &AppHandle) {
                     "drop-typing://wakeword-reset",
                     serde_json::json!({ "success": true }),
                 );
+                let _ = ah.emit("drop-typing://runtime-reload", serde_json::json!({}));
             }
             Err(e) => {
                 let _ = ah.emit(
@@ -928,7 +931,7 @@ pub fn register_settings_handlers(app: &AppHandle) {
                             let _ = ah.emit(
                                 "drop-typing://restart-required",
                                 serde_json::json!({
-                                    "message": "配置中热键或唤醒词设置已变化，需要重启应用后才能生效。",
+                                    "message": "配置中热键设置已变化，需要重启应用后才能生效。",
                                 }),
                             );
                         }

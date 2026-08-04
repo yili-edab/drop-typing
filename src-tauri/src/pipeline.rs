@@ -25,7 +25,7 @@ use tauri::{AppHandle, Listener, Manager};
 use crate::asr::{self, AsrBackend, RealtimeSession};
 use crate::audio::{AudioRecorder, ContinuousListener, RingBuffer, TailReader};
 use crate::command;
-use crate::config::Config;
+use crate::config::{Config, WakewordConfig};
 use crate::hotkey::{self, HotkeyEvent};
 use crate::inject::{self, Injector};
 use crate::llm::{self, TextCleaner};
@@ -107,6 +107,53 @@ impl RuntimeState {
     }
 }
 
+/// 唤醒词热开关命令（设置页保存后经 runtime-reload 触发）。
+enum WakeCommand {
+    Enable(WakewordConfig),
+    Disable,
+}
+
+/// 唤醒词管理线程：独占持有 cpal 持续监听流（Stream 不能跨线程），
+/// 收到命令后创建/停止监听，并把资源（环形缓冲 + 事件接收端）发给 pipeline。
+fn wake_manager_loop(
+    rx: mpsc::Receiver<WakeCommand>,
+    out_tx: mpsc::Sender<Option<(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>)>>,
+    resource_dir: std::path::PathBuf,
+) {
+    let mut listener: Option<ContinuousListener> = None;
+    while let Ok(cmd) = rx.recv() {
+        match cmd {
+            WakeCommand::Disable => {
+                // drop 即停止 cpal 流，麦克风指示灯熄灭
+                listener = None;
+                let _ = out_tx.send(None);
+            }
+            WakeCommand::Enable(wcfg) => {
+                // 配置变化时先停旧流，再按新配置重建
+                listener = None;
+                match ContinuousListener::new(wcfg.ring_buffer_duration_ms) {
+                    Ok(l) => {
+                        let engine = wakeword::create_engine(&wcfg, &resource_dir);
+                        if let Some(eng) = engine {
+                            let buf = l.buffer.clone();
+                            let wake_rx = ContinuousListener::start_wake_word(buf.clone(), eng);
+                            listener = Some(l);
+                            let _ = out_tx.send(Some((wcfg, buf, wake_rx)));
+                        } else {
+                            eprintln!("[drop-typing] 唤醒词引擎创建失败（模型缺失？）");
+                            let _ = out_tx.send(None);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[drop-typing] 唤醒词监听器启动失败：{e}");
+                        let _ = out_tx.send(None);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn start(app: AppHandle) {
     let staging = Staging::new(app.clone());
     let (cfg, warning) = Config::load_lenient();
@@ -153,10 +200,29 @@ pub fn start(app: AppHandle) {
         crate::settings::emit_styles(&app_for_style);
     });
 
-    // 设置页保存可热加载配置（模型 / 毫秒 / 指令词表）后，重建运行时状态。
-    // 热键绑定与唤醒词引擎保持启动时加载，改动需重启生效（由设置页提示）。
+    // 唤醒词（Phase 1）：独立管理线程持有 cpal 持续监听流，
+    // 支持运行中热开关（设置页保存后经 runtime-reload 命令重建/停止）。
+    let (wake_cmd_tx, wake_cmd_rx) = mpsc::channel::<WakeCommand>();
+    let (wake_out_tx, wake_out_rx) = mpsc::channel::<
+        Option<(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>)>,
+    >();
+    let wake_resource_dir = app.path().resource_dir().unwrap_or_default();
+    std::thread::Builder::new()
+        .name("drop-typing-wake-manager".into())
+        .spawn(move || wake_manager_loop(wake_cmd_rx, wake_out_tx, wake_resource_dir))
+        .expect("启动唤醒词管理线程失败");
+    if cfg.wakeword.enabled {
+        let _ = wake_cmd_tx.send(WakeCommand::Enable(cfg.wakeword.clone()));
+    }
+
+    // 设置页保存可热加载配置（模型 / 毫秒 / 指令词表 / 唤醒词）后，重建运行时状态。
+    // 热键绑定保持启动时加载，改动需重启生效（由设置页提示）。
     let runtime_for_reload = runtime.clone();
     let staging_for_reload = staging.clone();
+    let wake_cmd_for_reload = wake_cmd_tx.clone();
+    let last_wakeword: Arc<Mutex<Option<WakewordConfig>>> = Arc::new(Mutex::new(None));
+    *last_wakeword.lock().unwrap() = Some(cfg.wakeword.clone());
+    let last_wakeword_for_reload = last_wakeword.clone();
     app.listen("drop-typing://runtime-reload", move |_| {
         let (new_cfg, _) = Config::load_lenient();
         let mut g = runtime_for_reload.lock().unwrap();
@@ -165,6 +231,20 @@ pub fn start(app: AppHandle) {
             staging_for_reload.error(
                 "未配置 ASR API Key 或 provider 未知。请检查配置文件（见 config.example.toml）。",
             );
+        }
+        // 唤醒词段变化 → 热切换麦克风监听（无需重启）
+        let wakeword_changed = last_wakeword_for_reload
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(true, |old| old != &new_cfg.wakeword);
+        *last_wakeword_for_reload.lock().unwrap() = Some(new_cfg.wakeword.clone());
+        if wakeword_changed {
+            let _ = wake_cmd_for_reload.send(if new_cfg.wakeword.enabled {
+                WakeCommand::Enable(new_cfg.wakeword.clone())
+            } else {
+                WakeCommand::Disable
+            });
         }
     });
 
@@ -177,59 +257,22 @@ pub fn start(app: AppHandle) {
         }
     });
 
-    // 唤醒词（Phase 1）
-    let (wake_buffer, wake_rx) = 'wake: {
-        if !cfg.wakeword.enabled {
-            break 'wake (None, None);
-        }
-        let resource_dir = match app.path().resource_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("[drop-typing] 唤醒词：无法获取资源目录：{e}");
-                break 'wake (None, None);
-            }
-        };
-
-        match ContinuousListener::new(cfg.wakeword.ring_buffer_duration_ms) {
-            Ok(listener) => {
-                let engine = wakeword::create_engine(&cfg.wakeword, &resource_dir);
-                if let Some(eng) = engine {
-                    let buf = listener.buffer.clone();
-                    let rx = ContinuousListener::start_wake_word(
-                        buf.clone(),
-                        eng,
-                    );
-                    // listener 必须存活以保持 cpal 流不关闭；leak 到整个进程生命周期
-                    let _ = Box::leak(Box::new(listener));
-                    (Some(buf), Some(rx))
-                } else {
-                    (None, None)
-                }
-            }
-            Err(e) => {
-                eprintln!("[drop-typing] 唤醒词监听器启动失败：{e}");
-                (None, None)
-            }
-        }
-    };
-
     std::thread::spawn(move || {
         run_loop(
-            cfg, runtime, injector, staging, rx, current_style,
-            wake_buffer, wake_rx,
+            runtime, injector, staging, rx, current_style, wake_out_rx,
         );
     });
 }
 
 fn run_loop(
-    cfg: Config,
     runtime: Arc<Mutex<RuntimeState>>,
     injector: Box<dyn Injector>,
     staging: Staging,
     rx: mpsc::Receiver<HotkeyEvent>,
     current_style: Arc<Mutex<Option<String>>>,
-    wake_buffer: Option<Arc<RingBuffer>>,
-    wake_rx: Option<mpsc::Receiver<WakeEvent>>,
+    wake_out_rx: mpsc::Receiver<
+        Option<(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>)>,
+    >,
 ) {
     let recorder = match AudioRecorder::new() {
         Ok(r) => Some(r),
@@ -239,21 +282,19 @@ fn run_loop(
         }
     };
 
-    let mut state = if wake_buffer.is_some() && wake_rx.is_some() {
-        State::Listening
-    } else {
-        State::Idle
-    };
-    // 唤醒词资源（独立于 State enum，方便跨状态保留）
-    let wake_buffer: Option<Arc<RingBuffer>> = wake_buffer;
-    let wake_rx: Option<mpsc::Receiver<WakeEvent>> = wake_rx;
+    let mut state = State::Idle;
+    // 唤醒词资源（独立于 State enum，由管理线程热更新）
+    let mut wake_buffer: Option<Arc<RingBuffer>> = None;
+    let mut wake_rx: Option<mpsc::Receiver<WakeEvent>> = None;
+    let mut wake_cfg: Option<WakewordConfig> = None;
     let poll_interval = Duration::from_millis(50); // 轮询阈值到期
     let injector: Arc<dyn Injector> = Arc::from(injector); // 指令倒计时线程需要共享 injector
     // 指令代次：每次新录音/新指令 bump，倒计时线程执行前比对，防串台
     let command_gen = Arc::new(AtomicU64::new(0));
 
     // 返回应当的"空闲"态：唤醒词启用时返回 Listening，否则 Idle。
-    let idle_state = || {
+    let idle_state = |wake_buffer: &Option<Arc<RingBuffer>>,
+                      wake_rx: &Option<mpsc::Receiver<WakeEvent>>| {
         if wake_buffer.is_some() && wake_rx.is_some() {
             State::Listening
         } else {
@@ -275,6 +316,27 @@ fn run_loop(
                 g.command_countdown,
             )
         };
+        // 唤醒词热开关：应用管理线程发来的资源更新（启/停麦克风监听）
+        while let Ok(update) = wake_out_rx.try_recv() {
+            match update {
+                Some((wcfg, buf, wrx)) => {
+                    wake_cfg = Some(wcfg);
+                    wake_buffer = Some(buf);
+                    wake_rx = Some(wrx);
+                    if matches!(state, State::Idle) {
+                        state = State::Listening;
+                    }
+                }
+                None => {
+                    wake_cfg = None;
+                    wake_buffer = None;
+                    wake_rx = None;
+                    if matches!(state, State::Listening) {
+                        state = State::Idle;
+                    }
+                }
+            }
+        }
         match rx.recv_timeout(poll_interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // 按住期间：超阈值才显示暂存条（避免短按一闪而过），然后设"识别中"
@@ -310,13 +372,16 @@ fn run_loop(
                 if let State::PendingCommit { since } = &state {
                     if since.elapsed() >= double_press {
                         commit(&staging, injector.as_ref());
-                        state = idle_state();
+                        state = idle_state(&wake_buffer, &wake_rx);
                     }
                 }
                 // Listening 态下轮询唤醒词事件
                 if let State::Listening = &state {
-                    if let Some(ref buffer) = wake_buffer {
-                        if let Some(ref wrx) = wake_rx {
+                    if let (Some(ref buffer), Some(ref wrx), Some(ref wcfg)) = (
+                        wake_buffer.as_ref(),
+                        wake_rx.as_ref(),
+                        wake_cfg.as_ref(),
+                    ) {
                             if let Ok(event) = wrx.try_recv() {
                                 let WakeEvent::Detected { word, position } = event;
                                 eprintln!(
@@ -349,7 +414,7 @@ fn run_loop(
                                     // 其他 action → 录音转写
                                     _ => {
                                         start_wake_recording(
-                                            &staging, &recorder, &cfg, &backend,
+                                            &staging, &recorder, wcfg, &backend,
                                             buffer, word, position,
                                             &cleaner, &injector, command_countdown,
                                             &command_gen, &lexicon, &current_style,
@@ -360,7 +425,6 @@ fn run_loop(
                             }
                         }
                     }
-                }
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -371,7 +435,7 @@ fn run_loop(
                 // 第一按 ESC：仅消除错误，保留暂存条
                 if staging.has_error() {
                     staging.clear_error();
-                    state = idle_state();
+                    state = idle_state(&wake_buffer, &wake_rx);
                     continue;
                 }
                 // 第二按 ESC（或无错误）：完整清空
@@ -409,14 +473,14 @@ fn run_loop(
                     if staging.text().trim().is_empty() {
                         staging.hide();
                     }
-                    state = idle_state();
+                    state = idle_state(&wake_buffer, &wake_rx);
                     continue;
                 }
                 // 暂存条无内容：零副作用
                 if staging.text().trim().is_empty() {
                     continue;
                 }
-                state = idle_state(); // 取消 PendingCommit 待定
+                state = idle_state(&wake_buffer, &wake_rx); // 取消 PendingCommit 待定
                 // 取消尚未执行的指令倒计时，防止粘贴后倒计时按键打进输入框
                 command_gen.fetch_add(1, Ordering::SeqCst);
                 // 双击会在目标输入框选中一个单词，先按 → 折叠选区，
@@ -712,7 +776,7 @@ fn run_loop(
                 else {
                     continue;
                 };
-                state = idle_state();
+                state = idle_state(&wake_buffer, &wake_rx);
                 staging.set_recording(false);
 
                 let Some(r) = &recorder else { continue };
@@ -867,7 +931,7 @@ fn run_loop(
                 else {
                     continue;
                 };
-                state = idle_state();
+                state = idle_state(&wake_buffer, &wake_rx);
                 staging.set_recording(false);
 
                 let Some(r) = &recorder else { continue };
@@ -1047,7 +1111,7 @@ fn wake_word_to_mode(word: &WakeWord) -> RecordMode {
 fn start_wake_recording(
     staging: &Staging,
     _recorder: &Option<AudioRecorder>,
-    cfg: &Config,
+    wake_cfg: &WakewordConfig,
     backend: &Option<Arc<AsrBackend>>,
     buffer: &Arc<RingBuffer>,
     word: WakeWord,
@@ -1066,8 +1130,8 @@ fn start_wake_recording(
         word.text, word.action, mode,
     );
     let sample_rate: u64 = 16_000;
-    let pre_roll_samples = cfg.wakeword.pre_roll_ms * sample_rate / 1000;
-    let silence_samples = cfg.wakeword.silence_timeout_ms * sample_rate / 1000;
+    let pre_roll_samples = wake_cfg.pre_roll_ms * sample_rate / 1000;
+    let silence_samples = wake_cfg.silence_timeout_ms * sample_rate / 1000;
     // 唤醒词自身的采样数
     let _wake_word_samples = word.duration_ms() * sample_rate / 1000;
 

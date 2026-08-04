@@ -637,9 +637,10 @@ pub fn format_toml_error(raw: &str, e: &toml::de::Error) -> String {
     }
 }
 
-/// 判断新旧配置是否需要重启应用（热键或唤醒词段发生变化时返回 true）。
+/// 判断新旧配置是否需要重启应用（仅热键段发生变化时需要重启；
+/// 唤醒词段已支持热切换，不再要求重启）。
 pub fn needs_restart(old: &Config, new: &Config) -> bool {
-    old.hotkey != new.hotkey || old.wakeword != new.wakeword
+    old.hotkey != new.hotkey
 }
 
 #[cfg(test)]
@@ -691,11 +692,11 @@ mod tests {
     }
 
     #[test]
-    fn needs_restart_true_when_wakeword_changes() {
+    fn needs_restart_false_when_only_wakeword_changes() {
         let old = Config::default();
         let mut new = Config::default();
         new.wakeword.enabled = true;
-        assert!(needs_restart(&old, &new));
+        assert!(!needs_restart(&old, &new));
     }
 
     #[test]
