@@ -1022,6 +1022,34 @@ pub fn register_settings_handlers(app: &AppHandle) {
         });
     });
 
+    // ── 组合键录制（动作别名 / 快捷键面板）：开始
+    let ah = app.clone();
+    app.listen("drop-typing://start-combo-capture", move |_| {
+        eprintln!("[drop-typing] start-combo-capture received");
+        let ah = ah.clone();
+        std::thread::spawn(move || {
+            let result = hotkey::capture_combo(Duration::from_secs(10));
+            let (success, modifiers, key, error) = match result {
+                Ok(c) => (true, c.modifiers, c.key, String::new()),
+                Err(e) => (false, Vec::new(), String::new(), e),
+            };
+            let _ = ah.emit(
+                "drop-typing://combo-captured",
+                serde_json::json!({
+                    "success": success,
+                    "modifiers": modifiers,
+                    "key": key,
+                    "error": error,
+                }),
+            );
+        });
+    });
+
+    // ── 组合键录制：取消
+    app.listen("drop-typing://stop-combo-capture", move |_| {
+        hotkey::cancel_capture();
+    });
+
     app.listen("drop-typing://restart", move |_| {
         eprintln!("[drop-typing] restart requested");
         let exe = std::env::current_exe().unwrap_or_default();

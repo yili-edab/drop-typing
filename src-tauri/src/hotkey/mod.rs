@@ -13,10 +13,13 @@ pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use rdev::Key;
+use rdev::{EventType, Key};
 
 /// 热键事件。时长判定（短按/长按）放在 pipeline 做，本层只报原始按下/松开。
 #[derive(Debug, Clone)]
@@ -379,4 +382,201 @@ pub fn platform_name() -> &'static str {
     { "macos" }
     #[cfg(target_os = "windows")]
     { "windows" }
+}
+
+// ── 组合键录制（设置页动作别名 / 快捷键用） ───────────────────────────
+
+/// 一次录制捕获到的组合键。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedCombo {
+    /// 修饰键规范名（Ctrl / Opt / Shift / Cmd）
+    pub modifiers: Vec<String>,
+    /// 规范键名（A-Z / 0-9 / ENTER / SPACE / ...）
+    pub key: String,
+}
+
+/// 录制期间主监听把原始事件转发到捕获通道，且不再当作业务热键处理。
+pub(crate) static CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// 前端「取消」录制时置位。
+pub(crate) static CAPTURE_CANCEL: AtomicBool = AtomicBool::new(false);
+static CAPTURE_TX: OnceLock<Mutex<Option<mpsc::Sender<rdev::Event>>>> = OnceLock::new();
+
+fn capture_sender() -> &'static Mutex<Option<mpsc::Sender<rdev::Event>>> {
+    CAPTURE_TX.get_or_init(|| Mutex::new(None))
+}
+
+pub(crate) fn capture_active() -> bool {
+    CAPTURE_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// 主监听回调在录制期间把原始事件转发给捕获通道。
+pub(crate) fn forward_capture_event(event: &rdev::Event) {
+    if let Some(tx) = capture_sender().lock().unwrap().as_ref() {
+        let _ = tx.send(event.clone());
+    }
+}
+
+/// 取消进行中的录制（设置页「取消」按钮）。
+pub(crate) fn cancel_capture() {
+    CAPTURE_CANCEL.store(true, Ordering::SeqCst);
+    // 注入一个 Escape 事件唤醒可能阻塞在 recv_timeout 中的捕获线程
+    if let Some(tx) = capture_sender().lock().unwrap().as_ref() {
+        let _ = tx.send(rdev::Event {
+            time: std::time::SystemTime::now(),
+            name: None,
+            event_type: EventType::KeyPress(Key::Escape),
+        });
+    }
+}
+
+/// 修饰键家族 → 设置页规范名（Ctrl / Opt / Shift / Cmd）
+fn modifier_name(f: ModFamily) -> &'static str {
+    match f {
+        ModFamily::Control => "Ctrl",
+        ModFamily::Meta => "Cmd",
+        ModFamily::Alt => "Opt",
+        ModFamily::Shift => "Shift",
+    }
+}
+
+/// 判断按键属于哪个修饰键家族（非修饰键返回 None）。
+pub(crate) fn family_of(key: &Key) -> Option<ModFamily> {
+    if ModFamily::Control.matches(key) {
+        Some(ModFamily::Control)
+    } else if ModFamily::Alt.matches(key) {
+        Some(ModFamily::Alt)
+    } else if ModFamily::Shift.matches(key) {
+        Some(ModFamily::Shift)
+    } else if ModFamily::Meta.matches(key) {
+        Some(ModFamily::Meta)
+    } else {
+        None
+    }
+}
+
+/// rdev 按键 → 指令通道规范键名（不支持的返回 None）。
+pub(crate) fn map_rdev_key(key: &Key) -> Option<String> {
+    let name = format!("{key:?}");
+    if let Some(letter) = name.strip_prefix("Key") {
+        if letter.len() == 1 && letter.as_bytes()[0].is_ascii_uppercase() {
+            return Some(letter.to_string());
+        }
+    }
+    if let Some(d) = name.strip_prefix("Num") {
+        if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() {
+            return Some(d.to_string());
+        }
+    }
+    if let Some(f) = name.strip_prefix('F') {
+        if let Ok(n) = f.parse::<u8>() {
+            if (1..=12).contains(&n) {
+                return Some(format!("F{n}"));
+            }
+        }
+    }
+    match key {
+        Key::Return => Some("ENTER".to_string()),
+        Key::Space => Some("SPACE".to_string()),
+        Key::Tab => Some("TAB".to_string()),
+        Key::Escape => Some("ESC".to_string()),
+        Key::Backspace | Key::Delete => Some("DELETE".to_string()),
+        Key::UpArrow => Some("UP".to_string()),
+        Key::DownArrow => Some("DOWN".to_string()),
+        Key::LeftArrow => Some("LEFT".to_string()),
+        Key::RightArrow => Some("RIGHT".to_string()),
+        _ => None,
+    }
+}
+
+/// 开始一次组合键录制（阻塞，需在独立线程中调用）。
+///
+/// 复用应用已有的全局热键监听：录制期间主监听把原始事件转发到这里，
+/// 同时不再把按键当作业务热键处理；Escape 或超时（默认 10 秒）结束。
+pub fn capture_combo(timeout: Duration) -> Result<CapturedCombo, String> {
+    CAPTURE_ACTIVE.store(true, Ordering::SeqCst);
+    CAPTURE_CANCEL.store(false, Ordering::SeqCst);
+    let (tx, rx) = mpsc::channel::<rdev::Event>();
+    *capture_sender().lock().unwrap() = Some(tx);
+
+    let mut held: Vec<ModFamily> = Vec::new();
+    let deadline = Instant::now() + timeout;
+    let result = loop {
+        if CAPTURE_CANCEL.load(Ordering::SeqCst) {
+            break Err("已取消".to_string());
+        }
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break Err("录制超时".to_string());
+        }
+        let event = match rx.recv_timeout(remain) {
+            Ok(e) => e,
+            Err(_) => break Err("录制超时".to_string()),
+        };
+        match &event.event_type {
+            EventType::KeyPress(key) => {
+                if *key == Key::Escape {
+                    break Err("已取消".to_string());
+                }
+                if let Some(f) = family_of(key) {
+                    if !held.contains(&f) {
+                        held.push(f);
+                    }
+                } else if let Some(name) = map_rdev_key(key) {
+                    let modifiers = held
+                        .iter()
+                        .map(|f| modifier_name(*f).to_string())
+                        .collect();
+                    break Ok(CapturedCombo { modifiers, key: name });
+                }
+            }
+            EventType::KeyRelease(key) => {
+                if let Some(f) = family_of(key) {
+                    held.retain(|x| *x != f);
+                }
+            }
+            _ => {}
+        }
+    };
+
+    CAPTURE_ACTIVE.store(false, Ordering::SeqCst);
+    *capture_sender().lock().unwrap() = None;
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_letter_digit_and_function_keys() {
+        assert_eq!(map_rdev_key(&Key::KeyA).as_deref(), Some("A"));
+        assert_eq!(map_rdev_key(&Key::Num4).as_deref(), Some("4"));
+        assert_eq!(map_rdev_key(&Key::F4).as_deref(), Some("F4"));
+    }
+
+    #[test]
+    fn maps_named_keys() {
+        assert_eq!(map_rdev_key(&Key::Return).as_deref(), Some("ENTER"));
+        assert_eq!(map_rdev_key(&Key::Space).as_deref(), Some("SPACE"));
+        assert_eq!(map_rdev_key(&Key::UpArrow).as_deref(), Some("UP"));
+        assert_eq!(map_rdev_key(&Key::Escape).as_deref(), Some("ESC"));
+        assert_eq!(map_rdev_key(&Key::Backspace).as_deref(), Some("DELETE"));
+        assert_eq!(map_rdev_key(&Key::Delete).as_deref(), Some("DELETE"));
+    }
+
+    #[test]
+    fn rejects_unsupported_keys() {
+        assert_eq!(map_rdev_key(&Key::Unknown(0)), None);
+        assert_eq!(map_rdev_key(&Key::Function), None);
+    }
+
+    #[test]
+    fn family_of_modifiers() {
+        assert_eq!(family_of(&Key::MetaRight), Some(ModFamily::Meta));
+        assert_eq!(family_of(&Key::MetaLeft), Some(ModFamily::Meta));
+        assert_eq!(family_of(&Key::ShiftLeft), Some(ModFamily::Shift));
+        assert_eq!(family_of(&Key::AltGr), Some(ModFamily::Alt));
+        assert_eq!(family_of(&Key::ControlRight), Some(ModFamily::Control));
+        assert_eq!(family_of(&Key::KeyA), None);
+    }
 }

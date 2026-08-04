@@ -45,6 +45,11 @@ impl HotkeySource for RdevHotkey {
             .name("drop-typing-hotkey".into())
             .spawn(move || {
                 let result = rdev::grab(move |event: Event| {
+                    // 组合键录制期间：转发原始事件，不当作业务热键处理
+                    if super::capture_active() {
+                        super::forward_capture_event(&event);
+                        return None;
+                    }
                     let ev = match event.event_type {
                         EventType::KeyPress(ref key) => {
                             if matches_any(key, &bindings.trigger) {

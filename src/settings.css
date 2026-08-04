@@ -390,6 +390,78 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
 .lex-rec {
   flex: none;
 }
+.lex-kb {
+  flex: none;
+}
 .lex-del {
   flex: none;
+}
+
+/* ---- 可视化键盘选择器 ---- */
+.kb-modifiers {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.kb-mod {
+  appearance: none;
+  border: 1px solid var(--sl-color-neutral-300);
+  background: var(--sl-color-neutral-0);
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--sl-color-neutral-700);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.kb-mod:hover {
+  border-color: var(--sl-color-primary-400);
+}
+.kb-mod.active {
+  background: var(--sl-color-primary-600);
+  border-color: var(--sl-color-primary-600);
+  color: #fff;
+}
+.kb-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.kb-row {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+.kb-key {
+  appearance: none;
+  min-width: 36px;
+  height: 36px;
+  border: 1px solid var(--sl-color-neutral-300);
+  border-radius: 6px;
+  background: var(--sl-color-neutral-0);
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--sl-color-neutral-800);
+  padding: 0 6px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.kb-key:hover {
+  border-color: var(--sl-color-primary-400);
+}
+.kb-key.active {
+  background: var(--sl-color-primary-600);
+  border-color: var(--sl-color-primary-600);
+  color: #fff;
+}
+.kb-preview {
+  font-size: 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--sl-color-primary-700);
+  background: var(--sl-color-primary-50);
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-top: 4px;
 }

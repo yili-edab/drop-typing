@@ -522,79 +522,149 @@ const MOD_OPTIONS = ['Cmd', 'Opt', 'Ctrl', 'Shift'];
 const LETTER_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const CMD_MOD_ORDER = ['Ctrl', 'Opt', 'Shift', 'Cmd'];
 
-let actionRecording: { row: CommandEntry; teardown: () => void } | null = null;
-
-function cmdKeyFromCode(code: string): string | null {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-  const map: Record<string, string> = {
-    Enter: 'ENTER', Space: 'SPACE', Tab: 'TAB', Escape: 'ESC',
-    Backspace: 'DELETE', Delete: 'DELETE',
-    ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
-  };
-  if (map[code]) return map[code];
-  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
-  return null;
-}
-
 function formatActionCombo(row: CommandEntry): string {
   const mods = [...(row.modifiers || [])]
     .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
   return [...mods, row.key || '?'].join(' + ');
 }
 
-function stopActionRecording() {
-  actionRecording?.teardown?.();
-  actionRecording = null;
-  renderLexRows('action');
-}
+// ── 组合键录制（后端 rdev 全局监听，能捕获被其他软件拦截的组合键） ──
+
+let comboCapturePending = false;
+let comboCaptureRow: CommandEntry | null = null;
+let comboCaptureTimer: number | null = null;
 
 function startActionRecording(row: CommandEntry) {
-  stopActionRecording();
-  const held: string[] = [];
-  const addMod = (m: string) => { if (!held.includes(m)) held.push(m); };
-  const removeMod = (m: string) => {
-    const i = held.indexOf(m);
-    if (i >= 0) held.splice(i, 1);
-  };
+  if (comboCapturePending) stopActionRecording();
+  comboCapturePending = true;
+  comboCaptureRow = row;
+  renderLexRows('action');
+  emit('drop-typing://start-combo-capture');
+  comboCaptureTimer = window.setTimeout(() => {
+    if (comboCapturePending) {
+      comboCapturePending = false;
+      comboCaptureRow = null;
+      comboCaptureTimer = null;
+      renderLexRows('action');
+    }
+  }, 11000);
+}
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    e.preventDefault();
-    if (e.code === 'Escape') { stopActionRecording(); return; }
-    if (e.code.startsWith('Meta')) { addMod('Cmd'); return; }
-    if (e.code.startsWith('Alt')) { addMod('Opt'); return; }
-    if (e.code.startsWith('Control')) { addMod('Ctrl'); return; }
-    if (e.code.startsWith('Shift')) { addMod('Shift'); return; }
-    const key = cmdKeyFromCode(e.code);
-    if (!key) { toast('danger', `暂不支持的按键: ${e.code}`); return; }
-    row.modifiers = held.slice();
-    row.key = key;
-    stopActionRecording();
-  };
-  const onKeyUp = (e: KeyboardEvent) => {
-    if (e.code.startsWith('Meta')) removeMod('Cmd');
-    if (e.code.startsWith('Alt')) removeMod('Opt');
-    if (e.code.startsWith('Control')) removeMod('Ctrl');
-    if (e.code.startsWith('Shift')) removeMod('Shift');
-  };
-
-  document.addEventListener('keydown', onKeyDown);
-  document.addEventListener('keyup', onKeyUp);
-  const timer = setTimeout(() => {
-    toast('danger', '录制超时，已取消');
-    stopActionRecording();
-  }, 10000);
-
-  actionRecording = {
-    row,
-    teardown: () => {
-      clearTimeout(timer);
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('keyup', onKeyUp);
-    },
-  };
+function stopActionRecording() {
+  if (!comboCapturePending) return;
+  emit('drop-typing://stop-combo-capture');
+  comboCapturePending = false;
+  comboCaptureRow = null;
+  if (comboCaptureTimer !== null) {
+    clearTimeout(comboCaptureTimer);
+    comboCaptureTimer = null;
+  }
   renderLexRows('action');
 }
+
+listen<{ success: boolean; modifiers: string[]; key: string; error?: string }>(
+  'drop-typing://combo-captured', (e) => {
+    if (comboCaptureTimer !== null) {
+      clearTimeout(comboCaptureTimer);
+      comboCaptureTimer = null;
+    }
+    const row = comboCaptureRow;
+    comboCapturePending = false;
+    comboCaptureRow = null;
+    if (e.payload.success && row) {
+      row.modifiers = e.payload.modifiers || [];
+      row.key = e.payload.key || row.key || '';
+      toast('success', `已捕获：${formatActionCombo(row)}`);
+    } else if (e.payload.error && e.payload.error !== '已取消') {
+      toast('danger', e.payload.error || '录制失败');
+    }
+    renderLexRows('action');
+  }
+);
+
+// ── 可视化键盘选择器（点按组合键，不依赖实体按键） ──
+
+const dlgKeyboard = document.getElementById('dlg-keyboard') as any;
+const kbModifiersEl = document.getElementById('kb-modifiers')!;
+const kbKeysEl = document.getElementById('kb-keys')!;
+const kbPreviewText = document.getElementById('kb-preview-text')!;
+const kbOk = document.getElementById('kb-ok') as any;
+const kbCancel = document.getElementById('kb-cancel') as any;
+
+const KB_MOD_KEYS = ['Ctrl', 'Opt', 'Shift', 'Cmd'];
+const KB_LAYOUT = [
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+  ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+  ['Z', 'X', 'C', 'V', 'B', 'N', 'M'],
+  ['Tab', 'Space', 'Enter', 'Delete', 'Up', 'Down', 'Left', 'Right'],
+];
+
+let keyboardRow: CommandEntry | null = null;
+let keyboardMods: string[] = [];
+let keyboardKey: string | null = null;
+
+function renderKeyboard() {
+  kbModifiersEl.innerHTML = '';
+  for (const m of KB_MOD_KEYS) {
+    const btn = document.createElement('button');
+    btn.className = 'kb-mod' + (keyboardMods.includes(m) ? ' active' : '');
+    btn.textContent = m;
+    btn.addEventListener('click', () => {
+      const i = keyboardMods.indexOf(m);
+      if (i >= 0) keyboardMods.splice(i, 1);
+      else keyboardMods.push(m);
+      renderKeyboard();
+    });
+    kbModifiersEl.appendChild(btn);
+  }
+
+  kbKeysEl.innerHTML = '';
+  for (const row of KB_LAYOUT) {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'kb-row';
+    for (const k of row) {
+      const btn = document.createElement('button');
+      btn.className = 'kb-key' + (keyboardKey === k ? ' active' : '');
+      btn.textContent = k;
+      btn.addEventListener('click', () => {
+        keyboardKey = k;
+        renderKeyboard();
+      });
+      rowEl.appendChild(btn);
+    }
+    kbKeysEl.appendChild(rowEl);
+  }
+
+  const mods = [...keyboardMods]
+    .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
+  kbPreviewText.textContent = [...mods, keyboardKey || '?'].join(' + ');
+}
+
+function openKeyboard(row: CommandEntry) {
+  keyboardRow = row;
+  keyboardMods = [...(row.modifiers || [])];
+  keyboardKey = row.key || null;
+  renderKeyboard();
+  dlgKeyboard.show();
+}
+
+kbOk.addEventListener('click', () => {
+  if (!keyboardKey) {
+    toast('danger', '请先点击一个普通键');
+    return;
+  }
+  if (keyboardRow) {
+    keyboardRow.modifiers = [...keyboardMods]
+      .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
+    keyboardRow.key = keyboardKey;
+    toast('success', `已选择：${formatActionCombo(keyboardRow)}`);
+  }
+  dlgKeyboard.hide();
+  renderLexRows('action');
+});
+
+kbCancel.addEventListener('click', () => dlgKeyboard.hide());
 
 let commandConfig: CommandConfigState = {
   countdown_ms: null,
@@ -703,17 +773,25 @@ function renderLexRows(kind: string) {
         const recBtn = document.createElement('sl-button');
         recBtn.className = 'lex-rec';
         recBtn.size = 'small';
-        const recordingThis = actionRecording?.row === row;
+        const recordingThis = comboCapturePending && comboCaptureRow === row;
         recBtn.variant = recordingThis ? 'danger' : 'neutral';
         recBtn.textContent = recordingThis ? '取消' : '录制';
         recBtn.addEventListener('click', () => {
-          if (actionRecording?.row === row) {
+          if (comboCapturePending && comboCaptureRow === row) {
             stopActionRecording();
           } else {
             startActionRecording(row);
           }
         });
         el.appendChild(recBtn);
+
+        const kbBtn = document.createElement('sl-button');
+        kbBtn.className = 'lex-kb';
+        kbBtn.size = 'small';
+        kbBtn.variant = 'neutral';
+        kbBtn.textContent = '键盘选择';
+        kbBtn.addEventListener('click', () => openKeyboard(row));
+        el.appendChild(kbBtn);
       }
     } else if (kind === 'modifier') {
       const modSel = document.createElement('sl-select');

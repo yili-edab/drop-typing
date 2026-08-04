@@ -134,6 +134,11 @@ impl HotkeySource for WindowsHotkey {
                 let mut last_left_press: Option<std::time::Instant> = None;
 
                 let result = rdev::listen(move |event| {
+                    // 组合键录制期间：转发原始事件，不当作业务热键处理
+                    if super::capture_active() {
+                        super::forward_capture_event(&event);
+                        return;
+                    }
                     match event.event_type {
                         // ── 按键按下 ──
                         EventType::KeyPress(ref key) => {
