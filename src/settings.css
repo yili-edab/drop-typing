@@ -119,6 +119,17 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
 }
 
 /* ---- 语音唤醒面板 ---- */
+.ww-enabled-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.ww-enabled-row .help {
+  flex-basis: 100%;
+  margin: 0;
+}
 #wakeword-list {
   display: flex;
   flex-direction: column;

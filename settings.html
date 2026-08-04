@@ -195,6 +195,11 @@
 
         <!-- ── 语音唤醒 ── -->
         <section id="panel-wakeword" class="panel">
+          <div class="ww-enabled-row">
+            <sl-switch id="ww-enabled" size="small">启用语音唤醒</sl-switch>
+            <p class="help">关闭后不再监听唤醒词，仅使用快捷键；保存后需<strong>重启应用</strong>生效。</p>
+          </div>
+
           <label for="wakeword-list">语音唤醒词</label>
           <p class="help">
             自定义语音唤醒词及对应功能。保存后需<strong>重启应用</strong>生效。

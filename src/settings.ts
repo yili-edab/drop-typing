@@ -1168,6 +1168,7 @@ const btnWakewordTokens = document.getElementById('btn-wakeword-tokens') as any;
 const dlgTokens = document.getElementById('dlg-tokens') as any;
 const dlgTokensContent = document.getElementById('dlg-tokens-content')!;
 const dlgTokensClose = document.getElementById('dlg-tokens-close') as any;
+const wwEnabledSwitch = document.getElementById('ww-enabled') as any;
 
 // 状态
 interface WakewordEntry {
@@ -1177,6 +1178,7 @@ interface WakewordEntry {
 let wakewordEntries: WakewordEntry[] = [];
 let wakewordDefaults: WakewordEntry[] = [];
 let wakewordHasCustom = false;
+let wakewordEnabled = false;
 
 const ACTION_OPTIONS = [
   { value: 'input', label: '录入 (Input)' },
@@ -1254,7 +1256,7 @@ btnWakewordSave.addEventListener('click', () => {
   const keywords = wakewordEntries.filter(e => e.keyword.trim());
   emit('drop-typing://save-wakeword-config', {
     keywords,
-    enabled: keywords.length > 0,
+    enabled: wakewordEnabled,
     advanced: {
       model_dir: wwModelDir.value,
       keywords_threshold: parseFloat(wwThreshold.value),
@@ -1264,6 +1266,10 @@ btnWakewordSave.addEventListener('click', () => {
       ring_buffer_duration_ms: parseInt(wwRing.value, 10),
     },
   });
+});
+
+wwEnabledSwitch.addEventListener('sl-change', () => {
+  wakewordEnabled = wwEnabledSwitch.checked;
 });
 
 // 重置
@@ -1303,6 +1309,8 @@ listen<any>('drop-typing://wakeword-config', (e) => {
   const d = e.payload;
   wakewordDefaults = d.defaults || [];
   wakewordHasCustom = d.has_custom;
+  wakewordEnabled = !!d.enabled;
+  wwEnabledSwitch.checked = wakewordEnabled;
   if (d.keywords && d.keywords.length > 0) {
     wakewordEntries = d.keywords.map((k: any) => ({
       keyword: k.keyword,
