@@ -521,11 +521,26 @@ const KEY_OPTIONS = [
 const MOD_OPTIONS = ['Cmd', 'Opt', 'Ctrl', 'Shift'];
 const LETTER_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const CMD_MOD_ORDER = ['Ctrl', 'Opt', 'Shift', 'Cmd'];
+const MOD_GLYPH: Record<string, string> = {
+  Ctrl: '⌃', Opt: '⌥', Shift: '⇧', Cmd: '⌘',
+};
+const KEY_GLYPH: Record<string, string> = {
+  ENTER: '↩', SPACE: '␣', TAB: '⇥', ESC: '⎋', DELETE: '⌫',
+  UP: '↑', DOWN: '↓', LEFT: '←', RIGHT: '→',
+};
+
+function formatComboText(mods: string[], key: string): string {
+  const sorted = [...mods]
+    .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
+  const glyphMods = sorted.map(m => MOD_GLYPH[m] || m);
+  const glyphKey = KEY_GLYPH[key] || key;
+  return [...glyphMods, glyphKey].join(' + ');
+}
 
 function formatActionCombo(row: CommandEntry): string {
   const mods = [...(row.modifiers || [])]
     .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
-  return [...mods, row.key || '?'].join(' + ');
+  return formatComboText(mods, row.key || '?');
 }
 
 // ── 组合键录制（后端 rdev 全局监听，能捕获被其他软件拦截的组合键） ──
@@ -661,9 +676,7 @@ function renderKeyboard() {
     kbKeysEl.appendChild(rowEl);
   }
 
-  const mods = [...keyboardMods]
-    .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
-  kbPreviewText.textContent = [...mods, keyboardKey || '?'].join(' + ');
+  kbPreviewText.textContent = formatComboText(keyboardMods, keyboardKey || '?');
 }
 
 function openKeyboard(row: CommandEntry) {
