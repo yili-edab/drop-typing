@@ -563,6 +563,49 @@ pub fn capture_combo(timeout: Duration, distinguish_sides: bool) -> Result<Captu
     result
 }
 
+/// 开始一次"单键"录制（macOS 快捷键通道用）：返回第一个按下的键（含修饰键）的 rdev 键名。
+///
+/// `distinguish_sides` 为 false 时，修饰键降级为家族名（Control / Meta / Alt / Shift）。
+pub fn capture_single(timeout: Duration, distinguish_sides: bool) -> Result<String, String> {
+    CAPTURE_ACTIVE.store(true, Ordering::SeqCst);
+    CAPTURE_CANCEL.store(false, Ordering::SeqCst);
+    let (tx, rx) = mpsc::channel::<rdev::Event>();
+    *capture_sender().lock().unwrap() = Some(tx);
+
+    let deadline = Instant::now() + timeout;
+    let result = loop {
+        if CAPTURE_CANCEL.load(Ordering::SeqCst) {
+            break Err("已取消".to_string());
+        }
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break Err("录制超时".to_string());
+        }
+        let event = match rx.recv_timeout(remain) {
+            Ok(e) => e,
+            Err(_) => break Err("录制超时".to_string()),
+        };
+        if let EventType::KeyPress(key) = &event.event_type {
+            if *key == Key::Escape {
+                break Err("已取消".to_string());
+            }
+            let name = if !distinguish_sides {
+                match family_of(key) {
+                    Some(f) => modifier_name(f).to_string(),
+                    None => format!("{key:?}"),
+                }
+            } else {
+                format!("{key:?}")
+            };
+            break Ok(name);
+        }
+    };
+
+    CAPTURE_ACTIVE.store(false, Ordering::SeqCst);
+    *capture_sender().lock().unwrap() = None;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

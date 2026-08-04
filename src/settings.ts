@@ -533,7 +533,7 @@ const MOD_DISPLAY: Record<string, string> = {
   Control: 'CTRL', ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', Ctrl: 'CTRL',
   Option: 'OPT', Alt: 'L-OPT', AltGr: 'R-OPT', Opt: 'OPT',
   Shift: 'SHIFT', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT',
-  Command: 'CMD', MetaLeft: 'L-CMD', MetaRight: 'R-CMD', Cmd: 'CMD',
+  Command: 'CMD', Meta: 'CMD', MetaLeft: 'L-CMD', MetaRight: 'R-CMD', Cmd: 'CMD',
 };
 const PRECISE_MODS = new Set([
   'ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight',
@@ -602,8 +602,32 @@ function stopActionRecording() {
   renderLexRows('action');
 }
 
-listen<{ success: boolean; modifiers: string[]; key: string; error?: string }>(
+listen<{ success: boolean; modifiers: string[]; key: string; single_key?: string; error?: string }>(
   'drop-typing://combo-captured', (e) => {
+    // 快捷键面板录制结果
+    if (shortcutCapture) {
+      const ch = shortcutCapture.channel;
+      shortcutCapture = null;
+      if (e.payload.success) {
+        if (shortcutState.platform === 'macos') {
+          if (e.payload.single_key) {
+            shortcutState.keyboard[ch] = [singleToKeySpec(e.payload.single_key)];
+            toast('success', `已捕获：${formatShortcut(shortcutState.keyboard[ch], shortcutState.platform)}`);
+          }
+        } else {
+          const mods = [...new Set((e.payload.modifiers || []).map(toKeySpecMod))];
+          if (mods.length > 0) {
+            shortcutState.keyboard[ch] = mods;
+            toast('success', `已捕获：${formatShortcut(mods, shortcutState.platform)}`);
+          }
+        }
+      } else if (e.payload.error && e.payload.error !== '已取消') {
+        toast('danger', e.payload.error);
+      }
+      renderKeyboardChannels();
+      return;
+    }
+
     if (comboCaptureTimer !== null) {
       clearTimeout(comboCaptureTimer);
       comboCaptureTimer = null;
@@ -630,6 +654,7 @@ const kbPreviewText = document.getElementById('kb-preview-text')!;
 const kbOk = document.getElementById('kb-ok') as any;
 const kbCancel = document.getElementById('kb-cancel') as any;
 const kbClear = document.getElementById('kb-clear') as any;
+const kbSides = document.getElementById('kb-sides') as any;
 
 const KB_LAYOUT = [
   ['Esc', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'],
@@ -653,8 +678,48 @@ const KB_MOD_RESOLVE: Record<string, [string, string]> = {
 };
 
 let keyboardRow: CommandEntry | null = null;
+let keyboardMode: 'action' | 'single' | 'mods' = 'action';
+let keyboardChannel: string | null = null;
 let keyboardMods: string[] = [];
 let keyboardKey: string | null = null;
+let keyboardSingleKey: string | null = null;
+
+const KB_SINGLE_SPECIAL: Record<string, string> = {
+  Esc: 'Escape', Tab: 'Tab', Enter: 'Return', Space: 'Space',
+  '⌫': 'Delete', Delete: 'Delete',
+  '←': 'LeftArrow', '↓': 'DownArrow', '↑': 'UpArrow', '→': 'RightArrow',
+};
+
+function kbRdevName(label: string): string {
+  if (/^[A-Z]$/.test(label)) return 'Key' + label;
+  if (/^[0-9]$/.test(label)) return 'Num' + label;
+  if (/^F([1-9]|1[0-2])$/.test(label)) return label;
+  return KB_SINGLE_SPECIAL[label] || label;
+}
+
+/** 命令通道修饰键名 → 热键 KeySpec 家族名（Windows/单键模式用） */
+function toKeySpecMod(m: string): string {
+  if (m === 'Command') return 'Meta';
+  if (m === 'Option') return 'Alt';
+  return m;
+}
+
+/** 精确键名降级为家族名（取消「区分左右」时保存用） */
+function downgradePreciseKey(name: string): string {
+  if (name === 'ControlLeft' || name === 'ControlRight') return 'Control';
+  if (name === 'MetaLeft' || name === 'MetaRight') return 'Meta';
+  if (name === 'AltGr') return 'Alt';
+  if (name === 'ShiftLeft' || name === 'ShiftRight') return 'Shift';
+  return name;
+}
+
+/** 后端单键录制返回的家族短名 → KeySpec 家族名 */
+function singleToKeySpec(name: string): string {
+  if (name === 'Ctrl') return 'Control';
+  if (name === 'Cmd') return 'Meta';
+  if (name === 'Opt') return 'Alt';
+  return name;
+}
 
 function kbKeySupported(label: string): boolean {
   const value = kbKeyValue(label);
@@ -681,15 +746,25 @@ function renderKeyboard() {
     for (const label of row) {
       const isMod = label in KB_MOD_RESOLVE;
       if (isMod) {
-        const sides = !!keyboardRow?.distinguish_sides;
-        const modValue = sides ? KB_MOD_RESOLVE[label][0] : KB_MOD_RESOLVE[label][1];
+        const family = KB_MOD_RESOLVE[label][1];
+        const keySpecFamily = keyboardMode === 'action' ? family : toKeySpecMod(family);
+        const modValue = kbSides.checked ? KB_MOD_RESOLVE[label][0] : keySpecFamily;
+        const active = keyboardMode === 'single'
+          ? keyboardSingleKey === modValue
+          : keyboardMods.includes(modValue);
         const btn = document.createElement('button');
-        btn.className = 'kb-mod kb-key' + (keyboardMods.includes(modValue) ? ' active' : '');
-        btn.textContent = MOD_DISPLAY[modValue] || modValue;
+        btn.className = 'kb-mod kb-key' + (active ? ' active' : '');
+        btn.textContent = keyboardMode === 'action'
+          ? (MOD_DISPLAY[modValue] || modValue)
+          : keySpecDisplay(modValue, shortcutState.platform);
         btn.addEventListener('click', () => {
-          const i = keyboardMods.indexOf(modValue);
-          if (i >= 0) keyboardMods.splice(i, 1);
-          else keyboardMods.push(modValue);
+          if (keyboardMode === 'single') {
+            keyboardSingleKey = modValue;
+          } else {
+            const i = keyboardMods.indexOf(modValue);
+            if (i >= 0) keyboardMods.splice(i, 1);
+            else keyboardMods.push(modValue);
+          }
           renderKeyboard();
         });
         rowEl.appendChild(btn);
@@ -697,16 +772,23 @@ function renderKeyboard() {
       }
 
       const supported = kbKeySupported(label);
+      const modsOnly = keyboardMode === 'mods';
+      const singleKey = keyboardMode === 'single' ? kbRdevName(label) : null;
       const btn = document.createElement('button');
       btn.className = 'kb-key'
-        + (keyboardKey === kbKeyValue(label) ? ' active' : '')
+        + (keyboardMode === 'single' && keyboardSingleKey === singleKey ? ' active' : '')
+        + (keyboardMode === 'action' && keyboardKey === kbKeyValue(label) ? ' active' : '')
         + (label === 'Space' ? ' kb-wide' : '')
-        + (supported ? '' : ' kb-disabled');
+        + (supported && !modsOnly ? '' : ' kb-disabled');
       btn.textContent = label;
-      btn.title = supported ? '' : '暂不支持该按键';
-      btn.disabled = !supported;
+      btn.title = !supported ? '暂不支持该按键' : (modsOnly ? '本模式仅支持修饰键' : '');
+      btn.disabled = !supported || modsOnly;
       btn.addEventListener('click', () => {
-        keyboardKey = kbKeyValue(label);
+        if (keyboardMode === 'single' && singleKey) {
+          keyboardSingleKey = singleKey;
+        } else if (keyboardMode === 'action') {
+          keyboardKey = kbKeyValue(label);
+        }
         renderKeyboard();
       });
       rowEl.appendChild(btn);
@@ -714,30 +796,99 @@ function renderKeyboard() {
     kbKeysEl.appendChild(rowEl);
   }
 
-  kbPreviewText.textContent = formatComboText(keyboardMods, keyboardKey || '?');
+  if (keyboardMode === 'action') {
+    kbPreviewText.textContent = formatComboText(keyboardMods, keyboardKey || '?');
+  } else if (keyboardMode === 'single') {
+    kbPreviewText.textContent = keyboardSingleKey
+      ? keySpecDisplay(keyboardSingleKey, shortcutState.platform)
+      : '未选择';
+  } else {
+    kbPreviewText.textContent = keyboardMods.length
+      ? keyboardMods.map(m => keySpecDisplay(m, shortcutState.platform)).join(' + ')
+      : '未选择';
+  }
 }
 
 function openKeyboard(row: CommandEntry) {
+  keyboardMode = 'action';
   keyboardRow = row;
-  keyboardMods = normalizeModifiers(row.modifiers || [], !!row.distinguish_sides);
+  keyboardChannel = null;
+  keyboardSingleKey = null;
+  kbSides.checked = !!row.distinguish_sides;
+  keyboardMods = normalizeModifiers(row.modifiers || [], kbSides.checked);
   keyboardKey = row.key || null;
   renderKeyboard();
   dlgKeyboard.show();
 }
 
+function openShortcutKeyboard(channel: string) {
+  keyboardMode = shortcutState.platform === 'macos' ? 'single' : 'mods';
+  keyboardRow = null;
+  keyboardChannel = channel;
+  keyboardKey = null;
+  keyboardSingleKey = null;
+  kbSides.checked = !!shortcutState.sides[channel];
+  const keys = shortcutState.keyboard[channel] || [];
+  if (keyboardMode === 'single') {
+    keyboardSingleKey = keys[0] || null;
+    keyboardMods = [];
+  } else {
+    keyboardMods = [...keys];
+  }
+  renderKeyboard();
+  dlgKeyboard.show();
+}
+
+kbSides.addEventListener('sl-change', () => {
+  if (keyboardMode === 'action' && keyboardRow) {
+    keyboardRow.distinguish_sides = kbSides.checked;
+  } else if (keyboardChannel) {
+    shortcutState.sides[keyboardChannel] = kbSides.checked;
+  }
+  renderKeyboard();
+});
+
 kbOk.addEventListener('click', () => {
-  if (!keyboardKey) {
-    toast('danger', '请先点击一个普通键');
+  if (keyboardMode === 'action') {
+    if (!keyboardKey) {
+      toast('danger', '请先点击一个普通键');
+      return;
+    }
+    if (keyboardRow) {
+      keyboardRow.modifiers = [...keyboardMods]
+        .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
+      keyboardRow.key = keyboardKey;
+      toast('success', `已选择：${formatActionCombo(keyboardRow)}`);
+    }
+    dlgKeyboard.hide();
+    renderLexRows('action');
     return;
   }
-  if (keyboardRow) {
-    keyboardRow.modifiers = [...keyboardMods]
-      .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
-    keyboardRow.key = keyboardKey;
-    toast('success', `已选择：${formatActionCombo(keyboardRow)}`);
+  if (keyboardMode === 'single') {
+    if (!keyboardSingleKey) {
+      toast('danger', '请先点击一个按键');
+      return;
+    }
+    if (keyboardChannel) {
+      shortcutState.keyboard[keyboardChannel] = [keyboardSingleKey];
+      toast('success', `已选择：${formatShortcut(shortcutState.keyboard[keyboardChannel], shortcutState.platform)}`);
+    }
+    dlgKeyboard.hide();
+    renderKeyboardChannels();
+    return;
+  }
+  // mods（Windows 修饰键组合）
+  const mods = [...new Set(keyboardMods)];
+  if (mods.length === 0) {
+    toast('danger', '请至少选择一个修饰键');
+    return;
+  }
+  if (keyboardChannel) {
+    shortcutState.keyboard[keyboardChannel] = mods;
+    toast('success', `已选择：${formatShortcut(mods, shortcutState.platform)}`);
   }
   dlgKeyboard.hide();
-  renderLexRows('action');
+  renderKeyboardChannels();
 });
 
 kbCancel.addEventListener('click', () => dlgKeyboard.hide());
@@ -745,6 +896,7 @@ kbCancel.addEventListener('click', () => dlgKeyboard.hide());
 kbClear.addEventListener('click', () => {
   keyboardMods = [];
   keyboardKey = null;
+  keyboardSingleKey = null;
   renderKeyboard();
 });
 
@@ -844,6 +996,17 @@ function renderLexRows(kind: string) {
         el.appendChild(scriptInput);
       } else {
         // 快捷键：单个只读展示（非输入框）+ 直接录制
+        const sideSwitch = document.createElement('sl-switch');
+        sideSwitch.className = 'lex-sides';
+        sideSwitch.size = 'small';
+        sideSwitch.checked = !!row.distinguish_sides;
+        sideSwitch.textContent = '区分左右';
+        sideSwitch.addEventListener('sl-change', () => {
+          row.distinguish_sides = sideSwitch.checked;
+          renderLexRows('action');
+        });
+        el.appendChild(sideSwitch);
+
         const comboDisplay = document.createElement('span');
         comboDisplay.className = 'lex-combo-display' + (row.key ? '' : ' empty');
         comboDisplay.textContent = row.key ? formatActionCombo(row) : '未设置';
@@ -871,17 +1034,6 @@ function renderLexRows(kind: string) {
         kbBtn.textContent = '键盘选择';
         kbBtn.addEventListener('click', () => openKeyboard(row));
         el.appendChild(kbBtn);
-
-        const sideSwitch = document.createElement('sl-switch');
-        sideSwitch.className = 'lex-sides';
-        sideSwitch.size = 'small';
-        sideSwitch.checked = !!row.distinguish_sides;
-        sideSwitch.textContent = '区分左右';
-        sideSwitch.addEventListener('sl-change', () => {
-          row.distinguish_sides = sideSwitch.checked;
-          renderLexRows('action');
-        });
-        el.appendChild(sideSwitch);
       }
     } else if (kind === 'modifier') {
       const modSel = document.createElement('sl-select');
@@ -1228,50 +1380,6 @@ const MOUSE_CHANNELS = [
   { key: 'repair',  label: '修正 (Repair)',  desc: '后退键 (Back / X1)' },
 ] as const;
 
-// DOM event.code → rdev 键名映射
-const DOM_CODE_TO_RDEV: Record<string, string> = {
-  // 修饰键
-  MetaRight: 'MetaRight', MetaLeft: 'MetaLeft',
-  AltRight: 'AltGr', AltLeft: 'Alt',
-  ShiftRight: 'ShiftRight', ShiftLeft: 'ShiftLeft',
-  ControlRight: 'ControlRight', ControlLeft: 'ControlLeft',
-  // 导航
-  Escape: 'Escape', Space: 'Space', Tab: 'Tab',
-  Enter: 'Return', Backspace: 'Backspace', Delete: 'Delete',
-  ArrowUp: 'UpArrow', ArrowDown: 'DownArrow',
-  ArrowLeft: 'LeftArrow', ArrowRight: 'RightArrow',
-  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
-  Insert: 'Insert', CapsLock: 'CapsLock',
-  NumLock: 'NumLock', ScrollLock: 'ScrollLock',
-  Pause: 'Pause', PrintScreen: 'PrintScreen',
-  // 功能键
-  F1:'F1',F2:'F2',F3:'F3',F4:'F4',F5:'F5',F6:'F6',
-  F7:'F7',F8:'F8',F9:'F9',F10:'F10',F11:'F11',F12:'F12',
-  // 字母键
-  KeyA:'KeyA',KeyB:'KeyB',KeyC:'KeyC',KeyD:'KeyD',KeyE:'KeyE',
-  KeyF:'KeyF',KeyG:'KeyG',KeyH:'KeyH',KeyI:'KeyI',KeyJ:'KeyJ',
-  KeyK:'KeyK',KeyL:'KeyL',KeyM:'KeyM',KeyN:'KeyN',KeyO:'KeyO',
-  KeyP:'KeyP',KeyQ:'KeyQ',KeyR:'KeyR',KeyS:'KeyS',KeyT:'KeyT',
-  KeyU:'KeyU',KeyV:'KeyV',KeyW:'KeyW',KeyX:'KeyX',KeyY:'KeyY',
-  KeyZ:'KeyZ',
-  // 数字键
-  Digit0:'Num0',Digit1:'Num1',Digit2:'Num2',Digit3:'Num3',Digit4:'Num4',
-  Digit5:'Num5',Digit6:'Num6',Digit7:'Num7',Digit8:'Num8',Digit9:'Num9',
-  // 符号键
-  Backquote: 'BackQuote', Minus: 'Minus', Equal: 'Equal',
-  BracketLeft: 'LeftBracket', BracketRight: 'RightBracket',
-  Semicolon: 'SemiColon', Quote: 'Quote',
-  Backslash: 'BackSlash', IntlBackslash: 'IntlBackslash',
-  Comma: 'Comma', Period: 'Dot', Slash: 'Slash',
-  // 小键盘
-  NumpadEnter: 'KpReturn',
-  NumpadSubtract: 'KpMinus', NumpadAdd: 'KpPlus',
-  NumpadMultiply: 'KpMultiply', NumpadDivide: 'KpDivide',
-  NumpadDecimal: 'KpDelete',
-  Numpad0:'Kp0',Numpad1:'Kp1',Numpad2:'Kp2',Numpad3:'Kp3',Numpad4:'Kp4',
-  Numpad5:'Kp5',Numpad6:'Kp6',Numpad7:'Kp7',Numpad8:'Kp8',Numpad9:'Kp9',
-};
-
 // 家族名平台显示名称
 const FAMILY_DISPLAY: Record<string, Record<string, string>> = {
   macos:   { Control: 'Ctrl', Meta: 'Cmd', Alt: 'Opt', Shift: 'Shift' },
@@ -1330,6 +1438,7 @@ function formatShortcut(keys: string[], platform: string): string {
 interface ShortcutState {
   platform: 'macos' | 'windows';
   keyboard: Record<string, string[]>;
+  sides: Record<string, boolean>;
   mouse: Record<string, string | null>;
   defaults: {
     keyboard: Record<string, string[]>;
@@ -1340,13 +1449,12 @@ interface ShortcutState {
 let shortcutState: ShortcutState = {
   platform: 'macos',
   keyboard: {},
+  sides: {},
   mouse: {},
   defaults: { keyboard: {}, mouse: {} },
 };
 
-let recordingChannel: string | null = null;
-let recordingGroup: 'keyboard' | null = null;
-let recordingTeardown: (() => void) | null = null;
+let shortcutCapture: { channel: string; timer: number | null } | null = null;
 
 // ---- DOM ----
 
@@ -1362,7 +1470,7 @@ function renderKeyboardChannels() {
   keyboardChannelsEl.innerHTML = '';
   for (const ch of SHORTCUT_CHANNELS) {
     const keys = shortcutState.keyboard[ch.key] || [];
-    const isRecording = recordingGroup === 'keyboard' && recordingChannel === ch.key;
+    const isRecording = shortcutCapture?.channel === ch.key;
 
     const row = document.createElement('div');
     row.className = 'shortcut-row';
@@ -1396,9 +1504,9 @@ function renderKeyboardChannels() {
     recBtn.textContent = isRecording ? '取消' : '录制';
     recBtn.addEventListener('click', () => {
       if (isRecording) {
-        cancelRecording();
+        stopShortcutRecording();
       } else {
-        startRecording('keyboard', ch.key);
+        startShortcutRecording(ch.key);
       }
     });
 
@@ -1412,9 +1520,26 @@ function renderKeyboardChannels() {
       renderKeyboardChannels();
     });
 
+    // 键盘选择按钮
+    const kbBtn = document.createElement('sl-button');
+    kbBtn.size = 'small';
+    kbBtn.variant = 'neutral';
+    kbBtn.textContent = '键盘选择';
+    kbBtn.addEventListener('click', () => openShortcutKeyboard(ch.key));
+
+    // 区分左右开关（仅键盘通道显示；鼠标通道无修饰键概念）
+    const sideSwitch = document.createElement('sl-switch');
+    sideSwitch.size = 'small';
+    sideSwitch.checked = !!shortcutState.sides[ch.key];
+    sideSwitch.textContent = '区分左右';
+    sideSwitch.addEventListener('sl-change', () => {
+      shortcutState.sides[ch.key] = sideSwitch.checked;
+      renderKeyboardChannels();
+    });
+
     const btnGroup = document.createElement('div');
     btnGroup.className = 'shortcut-btn-group';
-    btnGroup.append(recBtn, clearBtn);
+    btnGroup.append(recBtn, clearBtn, kbBtn, sideSwitch);
 
     row.append(info, display, btnGroup);
     keyboardChannelsEl.appendChild(row);
@@ -1470,137 +1595,29 @@ function renderAllShortcut() {
   renderMouseChannels();
 }
 
-// ---- 录制逻辑 ----
+// ---- 录制逻辑（后端 rdev 全局监听，与动作别名一致） ----
 
-function updateRecordingHint(mods: string[]) {
-  const displayEl = document.querySelector(`.shortcut-display[data-channel="${recordingChannel}"]`);
-  if (displayEl) {
-    const names = mods.map(m => FAMILY_DISPLAY[shortcutState.platform]?.[m] ?? m).join(' + ');
-    displayEl.textContent = `正在录制… ${names} + ?`;
-  }
-}
-
-function cancelRecording() {
-  recordingTeardown?.();
-  recordingTeardown = null;
-  recordingChannel = null;
-  recordingGroup = null;
+function startShortcutRecording(channel: string) {
+  if (shortcutCapture) stopShortcutRecording();
+  shortcutCapture = { channel, timer: null };
   renderKeyboardChannels();
-}
-
-function startRecording(group: 'keyboard', channel: string) {
-  // 取消已有的录制
-  if (recordingTeardown) recordingTeardown();
-
-  recordingGroup = group;
-  recordingChannel = channel;
-  const platform = shortcutState.platform;
-
-  // 点击面板外取消录制
-  const onClickAway = (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (!target.closest('#panel-shortcut')) {
-      cancelRecording();
-    }
-  };
-  document.addEventListener('click', onClickAway, true);
-
-  if (platform === 'windows') {
-    // Windows：追踪修饰键组合
-    const heldMods: string[] = [];
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      // Escape 取消
-      if (e.code === 'Escape') { e.preventDefault(); cancelRecording(); return; }
-
-      // 追踪修饰键家族
-      if (e.code.startsWith('Control')) { e.preventDefault(); if (!heldMods.includes('Control')) heldMods.push('Control'); updateRecordingHint(heldMods); return; }
-      if (e.code.startsWith('Meta'))     { e.preventDefault(); if (!heldMods.includes('Meta')) heldMods.push('Meta'); updateRecordingHint(heldMods); return; }
-      if (e.code.startsWith('Alt'))      { e.preventDefault(); if (!heldMods.includes('Alt')) heldMods.push('Alt'); updateRecordingHint(heldMods); return; }
-      if (e.code.startsWith('Shift'))    { e.preventDefault(); if (!heldMods.includes('Shift')) heldMods.push('Shift'); updateRecordingHint(heldMods); return; }
-
-      // 非修饰键：确认组合
-      e.preventDefault();
-      const rdevName = DOM_CODE_TO_RDEV[e.code];
-      if (rdevName && heldMods.length > 0) {
-        // 修饰键 + 普通键 → 保存修饰键组合
-        shortcutState.keyboard[channel] = heldMods.slice();
-      } else if (rdevName) {
-        // 无修饰键 → 单键
-        shortcutState.keyboard[channel] = [rdevName];
-      }
-      stopRecording();
+  emit('drop-typing://start-combo-capture', {
+    mode: shortcutState.platform === 'macos' ? 'single' : 'combo',
+    distinguish_sides: !!shortcutState.sides[channel],
+  });
+  shortcutCapture.timer = window.setTimeout(() => {
+    if (shortcutCapture?.channel === channel) {
+      shortcutCapture = null;
       renderKeyboardChannels();
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code.startsWith('Control')) heldMods.splice(heldMods.indexOf('Control'), 1);
-      if (e.code.startsWith('Meta'))    heldMods.splice(heldMods.indexOf('Meta'), 1);
-      if (e.code.startsWith('Alt'))     heldMods.splice(heldMods.indexOf('Alt'), 1);
-      if (e.code.startsWith('Shift'))   heldMods.splice(heldMods.indexOf('Shift'), 1);
-
-      // 所有修饰键释放：如果只有修饰键被按下，以修饰键组合确认
-      if (heldMods.length === 0) {
-        // 等到下一个 tick 判断：如果没按其他键，可能是只按了修饰键
-        // 这里不做自动确认，留给超时处理
-      }
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('keyup', onKeyUp);
-    recordingTeardown = () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('keyup', onKeyUp);
-      document.removeEventListener('click', onClickAway, true);
-    };
-  } else {
-    // macOS：捕获单个按键
-    const onKeyDown = (e: KeyboardEvent) => {
-      // Escape 取消
-      if (e.code === 'Escape') { e.preventDefault(); cancelRecording(); return; }
-
-      // 阻止修饰键默认行为
-      if (e.code.startsWith('Meta') || e.code.startsWith('Alt') ||
-          e.code.startsWith('Control') || e.code.startsWith('Shift')) {
-        e.preventDefault();
-      }
-
-      const rdevName = DOM_CODE_TO_RDEV[e.code];
-      if (rdevName) {
-        shortcutState.keyboard[channel] = [rdevName];
-        stopRecording();
-        renderKeyboardChannels();
-        return;
-      }
-      // 不支持的按键
-      toast('danger', `暂不支持的按键: ${e.code}`);
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    recordingTeardown = () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('click', onClickAway, true);
-    };
-  }
-
-  // 10 秒超时
-  const timeoutId = setTimeout(() => {
-    if (recordingChannel === channel) {
-      cancelRecording();
-      toast('danger', '录制超时，已取消');
     }
-  }, 10000);
-  const prevTeardown = recordingTeardown!;
-  recordingTeardown = () => { clearTimeout(timeoutId); prevTeardown(); };
-
-  renderKeyboardChannels();
+  }, 11000);
 }
 
-function stopRecording() {
-  recordingTeardown?.();
-  recordingTeardown = null;
-  recordingChannel = null;
-  recordingGroup = null;
+function stopShortcutRecording() {
+  if (!shortcutCapture) return;
+  emit('drop-typing://stop-combo-capture');
+  shortcutCapture = null;
+  renderKeyboardChannels();
 }
 
 // ---- 事件 ----
@@ -1608,8 +1625,15 @@ function stopRecording() {
 btnShortcutSave.addEventListener('click', () => {
   btnShortcutSave.textContent = '保存中…';
   btnShortcutSave.disabled = true;
+  const keyboard: Record<string, string[]> = {};
+  for (const ch of SHORTCUT_CHANNELS) {
+    const keys = shortcutState.keyboard[ch.key] || [];
+    keyboard[ch.key] = shortcutState.sides[ch.key]
+      ? keys
+      : keys.map(downgradePreciseKey);
+  }
   emit('drop-typing://save-shortcut-config', {
-    keyboard: shortcutState.keyboard,
+    keyboard,
     mouse: shortcutState.mouse,
   });
 });
@@ -1630,6 +1654,10 @@ listen<any>('drop-typing://shortcut-config', (e) => {
   const d = e.payload;
   shortcutState.platform = d.platform;
   shortcutState.keyboard = { ...d.keyboard };
+  shortcutState.sides = {};
+  for (const k of Object.keys(shortcutState.keyboard)) {
+    shortcutState.sides[k] = (shortcutState.keyboard[k] || []).some(n => PRECISE_MODS.has(n));
+  }
   shortcutState.mouse = { ...d.mouse };
   shortcutState.defaults = {
     keyboard: { ...d.defaults.keyboard },

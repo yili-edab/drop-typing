@@ -94,7 +94,7 @@ pub fn run() {
                                     tauri::WebviewUrl::App("settings.html".into()),
                                 )
                                 .title("drop-typing 设置")
-                                .inner_size(900.0, 600.0)
+                                .inner_size(1100.0, 680.0)
                                 .resizable(true)
                                 .decorations(true)
                                 .center()

@@ -61,6 +61,9 @@
         <!-- 键盘选择弹窗 -->
         <sl-dialog id="dlg-keyboard" label="键盘选择快捷键">
           <p class="help">先点击修饰键（可多选），再点击一个普通键，然后点「确定」。</p>
+          <div class="kb-sides-row">
+            <sl-switch id="kb-sides" size="small">区分左右</sl-switch>
+          </div>
           <div id="kb-keys" class="kb-keys"></div>
           <div class="kb-preview">当前：<span id="kb-preview-text">无</span></div>
           <sl-button slot="footer" variant="default" id="kb-cancel">取消</sl-button>

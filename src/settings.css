@@ -170,6 +170,7 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   padding: 10px 14px;
   background: var(--sl-color-neutral-0);
   border: 1px solid var(--sl-color-neutral-200);
@@ -223,6 +224,7 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   display: flex;
   gap: 6px;
   flex: none;
+  flex-wrap: wrap;
 }
 
 .mouse-select {
@@ -505,4 +507,7 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   padding: 8px 12px;
   border-radius: 8px;
   margin-top: 4px;
+}
+.kb-sides-row {
+  margin-bottom: 12px;
 }

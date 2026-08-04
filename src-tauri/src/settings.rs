@@ -99,7 +99,7 @@ pub fn register_settings_handlers(app: &AppHandle) {
                 tauri::WebviewUrl::App("settings.html".into()),
             )
             .title("drop-typing 设置")
-            .inner_size(900.0, 600.0)
+            .inner_size(1100.0, 680.0)
             .resizable(true)
             .decorations(true)
             .center()
@@ -1032,12 +1032,23 @@ pub fn register_settings_handlers(app: &AppHandle) {
             .get("distinguish_sides")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let mode = payload
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("combo")
+            .to_string();
         let ah = ah.clone();
         std::thread::spawn(move || {
-            let result = hotkey::capture_combo(Duration::from_secs(10), distinguish_sides);
-            let (success, modifiers, key, error) = match result {
-                Ok(c) => (true, c.modifiers, c.key, String::new()),
-                Err(e) => (false, Vec::new(), String::new(), e),
+            let (success, modifiers, key, single_key, error) = if mode == "single" {
+                match hotkey::capture_single(Duration::from_secs(10), distinguish_sides) {
+                    Ok(k) => (true, Vec::new(), String::new(), Some(k), String::new()),
+                    Err(e) => (false, Vec::new(), String::new(), None, e),
+                }
+            } else {
+                match hotkey::capture_combo(Duration::from_secs(10), distinguish_sides) {
+                    Ok(c) => (true, c.modifiers, c.key, None, String::new()),
+                    Err(e) => (false, Vec::new(), String::new(), None, e),
+                }
             };
             let _ = ah.emit(
                 "drop-typing://combo-captured",
@@ -1045,6 +1056,7 @@ pub fn register_settings_handlers(app: &AppHandle) {
                     "success": success,
                     "modifiers": modifiers,
                     "key": key,
+                    "single_key": single_key,
                     "error": error,
                 }),
             );
