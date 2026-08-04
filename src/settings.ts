@@ -521,20 +521,11 @@ const KEY_OPTIONS = [
 const MOD_OPTIONS = ['Cmd', 'Opt', 'Ctrl', 'Shift'];
 const LETTER_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const CMD_MOD_ORDER = ['Ctrl', 'Opt', 'Shift', 'Cmd'];
-const MOD_GLYPH: Record<string, string> = {
-  Ctrl: '⌃', Opt: '⌥', Shift: '⇧', Cmd: '⌘',
-};
-const KEY_GLYPH: Record<string, string> = {
-  ENTER: '↩', SPACE: '␣', TAB: '⇥', ESC: '⎋', DELETE: '⌫',
-  UP: '↑', DOWN: '↓', LEFT: '←', RIGHT: '→',
-};
 
 function formatComboText(mods: string[], key: string): string {
   const sorted = [...mods]
     .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
-  const glyphMods = sorted.map(m => MOD_GLYPH[m] || m);
-  const glyphKey = KEY_GLYPH[key] || key;
-  return [...glyphMods, glyphKey].join(' + ');
+  return [...sorted.map(m => m.toUpperCase()), key.toUpperCase()].join(' + ');
 }
 
 function formatActionCombo(row: CommandEntry): string {
