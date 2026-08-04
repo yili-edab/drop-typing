@@ -9,8 +9,9 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 
+use super::devices::resolve_input_device;
 use crate::wakeword::sherpa::SherpaKws;
 use crate::wakeword::{WakeEvent, WakeWord};
 
@@ -201,10 +202,14 @@ impl ContinuousListener {
     ///
     /// `duration_ms` 决定环形缓冲区容量。设备不可用时返回错误。
     pub fn new(duration_ms: u64) -> anyhow::Result<Self> {
-        let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("未找到可用的麦克风设备"))?;
+        Self::new_with_device(duration_ms, None)
+    }
+
+    /// 创建监听器并指定输入设备名（`None` = 跟随系统默认）。
+    ///
+    /// `duration_ms` 决定环形缓冲区容量。配置的设备不存在时自动回退系统默认。
+    pub fn new_with_device(duration_ms: u64, device_name: Option<&str>) -> anyhow::Result<Self> {
+        let device = resolve_input_device(device_name)?;
         let config = device
             .default_input_config()
             .map_err(|e| anyhow::anyhow!("读取麦克风配置失败：{e}"))?;
@@ -213,7 +218,8 @@ impl ContinuousListener {
         let in_rate = config.sample_rate().0;
 
         eprintln!(
-            "[drop-typing] 持续监听：{:.1}kHz {}ch {:?} → 重采样至 16kHz",
+            "[drop-typing] 持续监听（{}）：{:.1}kHz {}ch {:?} → 重采样至 16kHz",
+            device.name().unwrap_or_else(|_| "未知设备".to_string()),
             in_rate as f64 / 1000.0,
             channels,
             sample_format,

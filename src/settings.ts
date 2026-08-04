@@ -84,6 +84,15 @@ const wwSilence = document.getElementById('ww-silence') as any;
 const wwPreRoll = document.getElementById('ww-pre-roll') as any;
 const wwRing = document.getElementById('ww-ring') as any;
 
+// ---- 定制硬件面板 DOM ----
+const audioDeviceSelect = document.getElementById('audio-device-select') as any;
+const audioDeviceNote = document.getElementById('audio-device-note')!;
+const btnAudioRefresh = document.getElementById('btn-audio-refresh') as any;
+const btnAudioSave = document.getElementById('btn-audio-save') as any;
+const btnSoundTest = document.getElementById('btn-sound-test') as any;
+const soundLevelFill = document.getElementById('sound-level-fill') as HTMLElement;
+const soundTestStatus = document.getElementById('sound-test-status')!;
+
 // ---- 状态 ----
 const BUILTIN_STYLE_KEYS = ['high_eq', 'low_eq', 'anti_pua', 'pua'];
 const BUILTIN_LABELS: Record<string, string> = {
@@ -251,6 +260,8 @@ function requestStylesList() {
 document.querySelectorAll<HTMLElement>('#menu li[data-panel]').forEach(li => {
   li.addEventListener('click', () => {
     const id = li.dataset.panel!;
+    // 离开「定制硬件」面板时自动结束试音
+    if (id !== 'hardware') stopSoundTest();
     document.querySelectorAll('#menu li[data-panel]').forEach(m => m.classList.remove('active'));
     li.classList.add('active');
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -266,6 +277,9 @@ document.querySelectorAll<HTMLElement>('#menu li[data-panel]').forEach(li => {
     if (id === 'advanced' && !generalLoaded) {
       requestGeneralConfig();
       requestConfigFile();
+    }
+    if (id === 'hardware' && !audioLoaded) {
+      requestAudioConfig();
     }
   });
 });
@@ -1841,6 +1855,108 @@ listen<{ success: boolean; error?: string }>('drop-typing://config-saved', () =>
   btnMillisSave.textContent = '保存';
   btnGeneralSave.disabled = false;
   btnMillisSave.disabled = false;
+});
+
+// ── 定制硬件面板（麦克风选择 + 试音） ────────────────────────────────
+
+let audioLoaded = false;
+let soundTesting = false;
+
+function requestAudioConfig() {
+  emit('drop-typing://get-audio-config');
+}
+
+function stopSoundTest() {
+  if (!soundTesting) return;
+  soundTesting = false;
+  emit('drop-typing://stop-sound-test');
+  btnSoundTest.textContent = '开始试音';
+  soundLevelFill.style.width = '0%';
+  soundTestStatus.textContent = '已结束';
+}
+
+listen<any>('drop-typing://audio-config', (e) => {
+  const payload = e.payload || {};
+  audioLoaded = true;
+  const devices: { name: string; is_default: boolean }[] = payload.devices || [];
+  // 重建选项：value 用 encodeURIComponent 编码——Shoelace 的 sl-option
+  // 不允许 value 含空格（会自动替换成下划线），而设备名几乎都带空格，
+  // 直接用作 value 会保存出错误的设备名。
+  const prev = audioDeviceSelect.value; // 编码后的值（或 ''）
+  audioDeviceSelect.innerHTML = '';
+  const sysOpt = document.createElement('sl-option');
+  sysOpt.value = '';
+  sysOpt.textContent = '系统默认（自动）';
+  audioDeviceSelect.appendChild(sysOpt);
+  for (const d of devices) {
+    const opt = document.createElement('sl-option');
+    opt.value = encodeURIComponent(d.name);
+    opt.textContent = d.is_default ? `${d.name}（系统默认）` : d.name;
+    audioDeviceSelect.appendChild(opt);
+  }
+  // 首次加载用配置值（真实设备名），刷新时保留当前未保存的选择
+  const target = prev || (payload.current ? encodeURIComponent(payload.current) : '');
+  const encodedNames = devices.map((d) => encodeURIComponent(d.name));
+  const missing = target !== '' && !encodedNames.includes(target);
+  audioDeviceSelect.value = missing ? '' : target;
+  audioDeviceSelect.requestUpdate?.();
+  audioDeviceNote.textContent = missing
+    ? `所选设备「${decodeURIComponent(target)}」当前未连接，已回退系统默认；插回后自动恢复。`
+    : '';
+});
+
+btnAudioRefresh.addEventListener('click', () => {
+  requestAudioConfig();
+});
+
+btnAudioSave.addEventListener('click', () => {
+  const raw = audioDeviceSelect.value || '';
+  let input_device: string | null = null;
+  if (raw) {
+    try {
+      input_device = decodeURIComponent(raw);
+    } catch {
+      input_device = raw;
+    }
+  }
+  emit('drop-typing://save-audio-config', {
+    input_device,
+  });
+});
+
+listen<any>('drop-typing://audio-config-saved', (e) => {
+  if (e.payload.success) toast('success', '麦克风设备已保存并立即生效');
+  else toast('danger', e.payload.error || '保存失败');
+});
+
+btnSoundTest.addEventListener('click', () => {
+  if (soundTesting) {
+    stopSoundTest();
+  } else {
+    soundTesting = true;
+    btnSoundTest.textContent = '停止试音';
+    soundLevelFill.style.width = '0%';
+    soundTestStatus.textContent = '正在监听，请说话…';
+    emit('drop-typing://start-sound-test');
+  }
+});
+
+listen<any>('drop-typing://sound-level', (e) => {
+  const level = Number(e.payload.level) || 0;
+  soundLevelFill.style.width = `${Math.round(Math.max(0, Math.min(1, level)) * 100)}%`;
+});
+
+listen<any>('drop-typing://sound-test-error', (e) => {
+  toast('danger', `${e.payload.message || '试音启动失败'}。若持续失败，请检查「系统设置 → 隐私与安全性 → 麦克风」是否已授权。`);
+  soundTesting = false;
+  btnSoundTest.textContent = '开始试音';
+  soundLevelFill.style.width = '0%';
+  soundTestStatus.textContent = '试音失败';
+});
+
+// 关闭设置窗口时兜底停止试音（后端窗口事件亦有兜底）
+window.addEventListener('beforeunload', () => {
+  if (soundTesting) emit('drop-typing://stop-sound-test');
 });
 
 // ── 初始化 ────────────────────────────────────────────────────────────

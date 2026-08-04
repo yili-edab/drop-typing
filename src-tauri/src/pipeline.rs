@@ -109,8 +109,14 @@ impl RuntimeState {
 
 /// 唤醒词热开关命令（设置页保存后经 runtime-reload 触发）。
 enum WakeCommand {
-    Enable(WakewordConfig),
+    Enable(WakewordConfig, Option<String>),
     Disable,
+}
+
+/// 录音器设备热切换命令（设置页保存 `[audio]` 后触发）。
+enum AudioCommand {
+    /// 按设备名重建录音器（None = 跟随系统默认）。
+    ReloadDevice(Option<String>),
 }
 
 /// 唤醒词管理线程：独占持有 cpal 持续监听流（Stream 不能跨线程），
@@ -128,10 +134,13 @@ fn wake_manager_loop(
                 listener = None;
                 let _ = out_tx.send(None);
             }
-            WakeCommand::Enable(wcfg) => {
+            WakeCommand::Enable(wcfg, device_name) => {
                 // 配置变化时先停旧流，再按新配置重建
                 listener = None;
-                match ContinuousListener::new(wcfg.ring_buffer_duration_ms) {
+                match ContinuousListener::new_with_device(
+                    wcfg.ring_buffer_duration_ms,
+                    device_name.as_deref(),
+                ) {
                     Ok(l) => {
                         let engine = wakeword::create_engine(&wcfg, &resource_dir);
                         if let Some(eng) = engine {
@@ -212,17 +221,27 @@ pub fn start(app: AppHandle) {
         .spawn(move || wake_manager_loop(wake_cmd_rx, wake_out_tx, wake_resource_dir))
         .expect("启动唤醒词管理线程失败");
     if cfg.wakeword.enabled {
-        let _ = wake_cmd_tx.send(WakeCommand::Enable(cfg.wakeword.clone()));
+        let _ = wake_cmd_tx.send(WakeCommand::Enable(
+            cfg.wakeword.clone(),
+            cfg.audio.input_device.clone(),
+        ));
     }
+
+    // 录音器设备热切换：设置页保存 `[audio]` 后由 runtime-reload 触发重建。
+    let (audio_cmd_tx, audio_cmd_rx) = mpsc::channel::<AudioCommand>();
 
     // 设置页保存可热加载配置（模型 / 毫秒 / 指令词表 / 唤醒词）后，重建运行时状态。
     // 热键绑定保持启动时加载，改动需重启生效（由设置页提示）。
     let runtime_for_reload = runtime.clone();
     let staging_for_reload = staging.clone();
     let wake_cmd_for_reload = wake_cmd_tx.clone();
+    let audio_cmd_for_reload = audio_cmd_tx.clone();
     let last_wakeword: Arc<Mutex<Option<WakewordConfig>>> = Arc::new(Mutex::new(None));
     *last_wakeword.lock().unwrap() = Some(cfg.wakeword.clone());
     let last_wakeword_for_reload = last_wakeword.clone();
+    let last_audio: Arc<Mutex<Option<crate::config::AudioConfig>>> = Arc::new(Mutex::new(None));
+    *last_audio.lock().unwrap() = Some(cfg.audio.clone());
+    let last_audio_for_reload = last_audio.clone();
     app.listen("drop-typing://runtime-reload", move |_| {
         let (new_cfg, _) = Config::load_lenient();
         let mut g = runtime_for_reload.lock().unwrap();
@@ -232,16 +251,31 @@ pub fn start(app: AppHandle) {
                 "未配置 ASR API Key 或 provider 未知。请检查配置文件（见 config.example.toml）。",
             );
         }
-        // 唤醒词段变化 → 热切换麦克风监听（无需重启）
+        // 音频设备段变化 → 重建录音器（空闲时立即换，录音中由 run_loop 延后）
+        let audio_changed = last_audio_for_reload
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(true, |old| old != &new_cfg.audio);
+        *last_audio_for_reload.lock().unwrap() = Some(new_cfg.audio.clone());
+        if audio_changed {
+            let _ = audio_cmd_for_reload.send(AudioCommand::ReloadDevice(
+                new_cfg.audio.input_device.clone(),
+            ));
+        }
+        // 唤醒词段或音频设备变化 → 热切换麦克风监听（无需重启）
         let wakeword_changed = last_wakeword_for_reload
             .lock()
             .unwrap()
             .as_ref()
             .map_or(true, |old| old != &new_cfg.wakeword);
         *last_wakeword_for_reload.lock().unwrap() = Some(new_cfg.wakeword.clone());
-        if wakeword_changed {
+        if wakeword_changed || audio_changed {
             let _ = wake_cmd_for_reload.send(if new_cfg.wakeword.enabled {
-                WakeCommand::Enable(new_cfg.wakeword.clone())
+                WakeCommand::Enable(
+                    new_cfg.wakeword.clone(),
+                    new_cfg.audio.input_device.clone(),
+                )
             } else {
                 WakeCommand::Disable
             });
@@ -259,7 +293,14 @@ pub fn start(app: AppHandle) {
 
     std::thread::spawn(move || {
         run_loop(
-            runtime, injector, staging, rx, current_style, wake_out_rx,
+            runtime,
+            injector,
+            staging,
+            rx,
+            current_style,
+            wake_out_rx,
+            audio_cmd_rx,
+            cfg.audio.input_device.clone(),
         );
     });
 }
@@ -273,14 +314,18 @@ fn run_loop(
     wake_out_rx: mpsc::Receiver<
         Option<(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>)>,
     >,
+    audio_rx: mpsc::Receiver<AudioCommand>,
+    initial_audio_device: Option<String>,
 ) {
-    let recorder = match AudioRecorder::new() {
+    let mut recorder = match AudioRecorder::new_with_device(initial_audio_device.as_deref()) {
         Ok(r) => Some(r),
         Err(e) => {
             staging.error(&format!("麦克风初始化失败：{e}"));
             None
         }
     };
+    // 设备热切换：录音中到达的命令延后到本次录音结束再执行
+    let mut pending_device: Option<Option<String>> = None;
 
     let mut state = State::Idle;
     // 唤醒词资源（独立于 State enum，由管理线程热更新）
@@ -335,6 +380,37 @@ fn run_loop(
                         state = State::Idle;
                     }
                 }
+            }
+        }
+        // 录音器设备热切换：空闲时立即重建，录音中延后到结束后再换
+        while let Ok(cmd) = audio_rx.try_recv() {
+            match cmd {
+                AudioCommand::ReloadDevice(name) => {
+                    if matches!(state, State::Recording { .. }) {
+                        pending_device = Some(name);
+                    } else {
+                        recorder = match AudioRecorder::new_with_device(name.as_deref()) {
+                            Ok(r) => Some(r),
+                            Err(e) => {
+                                staging.error(&format!("麦克风初始化失败：{e}"));
+                                None
+                            }
+                        };
+                    }
+                }
+            }
+        }
+        if let Some(name) = pending_device.take() {
+            if matches!(state, State::Recording { .. }) {
+                pending_device = Some(name); // 本次录音未结束，下轮再试
+            } else {
+                recorder = match AudioRecorder::new_with_device(name.as_deref()) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        staging.error(&format!("麦克风初始化失败：{e}"));
+                        None
+                    }
+                };
             }
         }
         match rx.recv_timeout(poll_interval) {

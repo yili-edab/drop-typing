@@ -15,6 +15,7 @@
           <li data-panel="shortcut">快捷键</li>
           <li data-panel="voice-command">语音控制</li>
           <li data-panel="wakeword">语音唤醒</li>
+          <li data-panel="hardware">定制硬件</li>
           <li data-panel="advanced">高级</li>
         </ul>
         <div id="nav-footer">
@@ -235,6 +236,40 @@
             <sl-button id="btn-wakeword-tokens" variant="default">查看 Token</sl-button>
             <sl-button id="btn-wakeword-reset" variant="default">重置</sl-button>
             <sl-button id="btn-wakeword-save" variant="primary">保存</sl-button>
+          </div>
+        </section>
+
+        <!-- ── 定制硬件 ── -->
+        <section id="panel-hardware" class="panel">
+          <h2 class="panel-section-title">麦克风选择</h2>
+          <p class="help">
+            选择用于录音的输入设备（如自有 USB 麦克风）。不选或选「系统默认」时跟随
+            系统默认输入设备；所选设备未连接时自动回退系统默认，插回后自动优先用回。
+          </p>
+          <div class="form-grid">
+            <sl-select id="audio-device-select" label="输入设备">
+              <sl-option value="">系统默认（自动）</sl-option>
+            </sl-select>
+            <p class="help" id="audio-device-note"></p>
+          </div>
+          <div class="actions">
+            <sl-button id="btn-audio-refresh" variant="neutral">刷新设备</sl-button>
+            <sl-button id="btn-audio-save" variant="primary">保存</sl-button>
+          </div>
+
+          <h2 class="panel-section-title">试音</h2>
+          <p class="help">
+            点击「开始试音」后对着麦克风说话，进度条会随音量实时跳动；再点一次结束，
+            或切换面板 / 关闭设置窗口时自动停止。
+          </p>
+          <div class="actions">
+            <sl-button id="btn-sound-test" variant="default">开始试音</sl-button>
+          </div>
+          <div class="level-bar-wrap">
+            <div class="level-bar">
+              <div id="sound-level-fill" class="level-bar-fill"></div>
+            </div>
+            <p class="help" id="sound-test-status">未在试音</p>
           </div>
         </section>
 

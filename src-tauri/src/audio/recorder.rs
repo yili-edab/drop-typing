@@ -16,7 +16,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
+
+use super::devices::resolve_input_device;
 
 const TARGET_RATE: u32 = 16_000;
 
@@ -32,16 +34,21 @@ pub struct AudioRecorder {
 }
 
 impl AudioRecorder {
-    /// 创建录音器并启动音频线程。设备缺失时立即报错。
+    /// 创建录音器并启动音频线程（跟随系统默认输入设备）。设备缺失时立即报错。
     pub fn new() -> Result<Self> {
-        let host = cpal::default_host();
-        if host.default_input_device().is_none() {
-            return Err(anyhow!("未找到可用的麦克风设备"));
-        }
+        Self::new_with_device(None)
+    }
+
+    /// 创建录音器并指定输入设备名（`None` = 跟随系统默认）。
+    ///
+    /// 配置的设备不存在时自动回退系统默认；两者都不可用时立即报错。
+    pub fn new_with_device(device_name: Option<&str>) -> Result<Self> {
+        let device_name = device_name.map(|s| s.to_string());
+        resolve_input_device(device_name.as_deref())?; // 提前校验，无可用设备立即报错
         let (tx, rx) = mpsc::channel::<Command>();
         std::thread::Builder::new()
             .name("drop-typing-audio".into())
-            .spawn(move || audio_thread(rx))?;
+            .spawn(move || audio_thread(rx, device_name))?;
         Ok(Self { tx })
     }
 
@@ -72,14 +79,13 @@ struct CaptureState {
     resampler: Option<StreamingResampler>,
 }
 
-fn audio_thread(rx: mpsc::Receiver<Command>) {
-    let host = cpal::default_host();
-    let device = match host.default_input_device() {
-        Some(d) => d,
-        None => {
+fn audio_thread(rx: mpsc::Receiver<Command>, device_name: Option<String>) {
+    let device = match resolve_input_device(device_name.as_deref()) {
+        Ok(d) => d,
+        Err(e) => {
             for cmd in rx {
                 if let Command::Stop(reply) = cmd {
-                    let _ = reply.send(Err("未找到可用的麦克风设备".into()));
+                    let _ = reply.send(Err(e.to_string()));
                 }
             }
             return;

@@ -183,6 +183,16 @@ impl Default for WakewordConfig {
         }
     }
 }
+
+/// 音频输入设备配置（定制硬件：USB 麦克风选择）。
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct AudioConfig {
+    /// 指定的输入设备名（如 "Drop Mic"）；缺省/为空时跟随系统默认输入设备。
+    /// 所选设备未连接时静默回退系统默认，插回后自动优先用回。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_device: Option<String>,
+}
+
 // 文档推荐只用 Cmd / Ctrl / Opt / Shift，但代码兼容所有写法。
 impl<'de> Deserialize<'de> for Modifier {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -433,6 +443,9 @@ pub struct Config {
     /// 唤醒词（缺省关闭）
     #[serde(default)]
     pub wakeword: WakewordConfig,
+    /// 音频输入设备（定制硬件：USB 麦克风选择）
+    #[serde(default)]
+    pub audio: AudioConfig,
     /// 旧版（M1）顶层 Key，向后兼容
     #[serde(default)]
     pub dashscope_api_key: Option<String>,
@@ -463,6 +476,7 @@ impl Default for Config {
             command: CommandConfig::default(),
             hotkey: HotkeyConfig::default(),
             wakeword: WakewordConfig::default(),
+            audio: AudioConfig::default(),
         }
     }
 }

@@ -4,7 +4,9 @@
 
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::asr::{self, AsrBackend};
@@ -87,13 +89,18 @@ async fn run_asr_test(backend: AsrBackend) -> Result<String, String> {
 pub fn register_settings_handlers(app: &AppHandle) {
     let app_handle = app.clone();
 
+    // ── 试音状态（定制硬件面板）：单实例保护 + 停止信号 ──
+    let testing_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
     // ── 暂存条请求打开设置窗口
+    let stop_on_close = stop_flag.clone();
     app.listen("drop-typing://open-settings", move |_| {
         if let Some(win) = app_handle.get_webview_window("settings") {
             let _ = win.show();
             let _ = win.set_focus();
         } else {
-            let _ = tauri::WebviewWindowBuilder::new(
+            let win = tauri::WebviewWindowBuilder::new(
                 &app_handle,
                 "settings",
                 tauri::WebviewUrl::App("settings.html".into()),
@@ -104,6 +111,15 @@ pub fn register_settings_handlers(app: &AppHandle) {
             .decorations(true)
             .center()
             .build();
+            // 关闭设置窗口时兜底停止试音（防前端异常退出导致试音流悬挂）
+            if let Ok(win) = win {
+                let stop_on_close = stop_on_close.clone();
+                win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        stop_on_close.store(true, Ordering::SeqCst);
+                    }
+                });
+            }
         }
     });
 
@@ -574,6 +590,102 @@ pub fn register_settings_handlers(app: &AppHandle) {
                 );
             }
         }
+    });
+
+    // ── 定制硬件（音频设备）：获取设备列表与当前选择
+    let ah = app.clone();
+    app.listen("drop-typing://get-audio-config", move |_| {
+        eprintln!("[drop-typing] get-audio-config received");
+        let (cfg, _) = Config::load_lenient();
+        let (all, default_name) = {
+            let all = crate::audio::list_input_devices().unwrap_or_default();
+            let default_name = all
+                .iter()
+                .find(|(_, is_default)| *is_default)
+                .map(|(name, _)| name.clone());
+            (all, default_name)
+        };
+        let devices: Vec<serde_json::Value> = all
+            .into_iter()
+            .map(|(name, is_default)| {
+                serde_json::json!({ "name": name, "is_default": is_default })
+            })
+            .collect();
+        let _ = ah.emit(
+            "drop-typing://audio-config",
+            serde_json::json!({
+                "devices": devices,
+                "current": cfg.audio.input_device,
+                "default_name": default_name,
+            }),
+        );
+    });
+
+    // ── 定制硬件（音频设备）：保存设备选择 → 写盘 + 热切换
+    let ah = app.clone();
+    app.listen("drop-typing://save-audio-config", move |ev| {
+        eprintln!("[drop-typing] save-audio-config received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let input_device = payload
+            .get("input_device")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let (mut cfg, _) = Config::load_lenient();
+        cfg.audio.input_device = input_device;
+        match cfg.save() {
+            Ok(()) => {
+                eprintln!("[drop-typing] audio config saved");
+                let _ = ah.emit(
+                    "drop-typing://audio-config-saved",
+                    serde_json::json!({ "success": true }),
+                );
+                // 通知 pipeline 热切换录音器与唤醒词监听（无需重启）
+                let _ = ah.emit("drop-typing://runtime-reload", serde_json::json!({}));
+            }
+            Err(e) => {
+                eprintln!("[drop-typing] audio config save failed: {e}");
+                let _ = ah.emit(
+                    "drop-typing://audio-config-saved",
+                    serde_json::json!({ "success": false, "error": e.to_string() }),
+                );
+            }
+        }
+    });
+
+    // ── 试音：开始（单实例保护，重复开始忽略）
+    let testing_start = testing_flag.clone();
+    let stop_start = stop_flag.clone();
+    let app_for_test = app.clone();
+    app.listen("drop-typing://start-sound-test", move |_| {
+        if testing_start.swap(true, Ordering::SeqCst) {
+            return; // 已在试音中
+        }
+        stop_start.store(false, Ordering::SeqCst);
+        let app_for_test = app_for_test.clone();
+        let stop_done = stop_start.clone();
+        let testing_done = testing_start.clone();
+        std::thread::spawn(move || {
+            if let Err(e) =
+                crate::audio::run_sound_level_meter(app_for_test.clone(), stop_done.clone())
+            {
+                eprintln!("[drop-typing] 试音启动失败：{e}");
+                let _ = app_for_test.emit(
+                    "drop-typing://sound-test-error",
+                    serde_json::json!({ "message": e.to_string() }),
+                );
+            }
+            stop_done.store(false, Ordering::SeqCst);
+            testing_done.store(false, Ordering::SeqCst);
+        });
+    });
+
+    // ── 试音：停止
+    let stop_stop = stop_flag.clone();
+    app.listen("drop-typing://stop-sound-test", move |_| {
+        stop_stop.store(true, Ordering::SeqCst);
     });
 
     // ── 快捷键配置：获取当前配置

@@ -522,3 +522,28 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
 .kb-sides-row {
   margin-bottom: 12px;
 }
+
+/* ---- 定制硬件：试音音量条 ---- */
+.level-bar-wrap {
+  margin-top: 16px;
+}
+
+.level-bar {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--sl-color-neutral-200);
+  overflow: hidden;
+}
+
+.level-bar-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 7px;
+  background: var(--sl-color-primary-600);
+  transition: width 80ms linear;
+}
+
+#sound-test-status {
+  margin-top: 8px;
+}
