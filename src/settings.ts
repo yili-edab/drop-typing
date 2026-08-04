@@ -16,6 +16,7 @@ import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/select/select.js';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
 import '@shoelace-style/shoelace/dist/components/details/details.js';
+import '@shoelace-style/shoelace/dist/components/switch/switch.js';
 import { emit, listen } from '@tauri-apps/api/event';
 
 // ---- DOM ----
@@ -500,6 +501,7 @@ interface CommandEntry {
   letter?: string;
   script?: string;
   mode?: 'hotkey' | 'script';
+  distinguish_sides?: boolean;
 }
 
 interface CommandConfigState {
@@ -520,17 +522,47 @@ const KEY_OPTIONS = [
 ];
 const MOD_OPTIONS = ['Cmd', 'Opt', 'Ctrl', 'Shift'];
 const LETTER_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-const CMD_MOD_ORDER = ['Ctrl', 'Opt', 'Shift', 'Cmd'];
+const CMD_MOD_ORDER = [
+  'Control', 'Ctrl', 'ControlLeft', 'ControlRight',
+  'Option', 'Opt', 'Alt', 'AltGr',
+  'Shift', 'ShiftLeft', 'ShiftRight',
+  'Command', 'Cmd', 'MetaLeft', 'MetaRight',
+];
+
+const MOD_DISPLAY: Record<string, string> = {
+  Control: 'CTRL', ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', Ctrl: 'CTRL',
+  Option: 'OPT', Alt: 'L-OPT', AltGr: 'R-OPT', Opt: 'OPT',
+  Shift: 'SHIFT', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT',
+  Command: 'CMD', MetaLeft: 'L-CMD', MetaRight: 'R-CMD', Cmd: 'CMD',
+};
+const PRECISE_MODS = new Set([
+  'ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight',
+  'Alt', 'AltGr', 'ShiftLeft', 'ShiftRight',
+]);
+const MOD_FAMILY: Record<string, string> = {
+  ControlLeft: 'Control', ControlRight: 'Control',
+  MetaLeft: 'Command', MetaRight: 'Command',
+  Alt: 'Option', AltGr: 'Option',
+  ShiftLeft: 'Shift', ShiftRight: 'Shift',
+};
+
+function isPreciseMods(mods?: string[]): boolean {
+  return !!mods && mods.some(m => PRECISE_MODS.has(m));
+}
+
+function normalizeModifiers(mods: string[], sides: boolean): string[] {
+  const out = mods.map(m => sides ? m : (MOD_FAMILY[m] || m));
+  return [...new Set(out)];
+}
 
 function formatComboText(mods: string[], key: string): string {
   const sorted = [...mods]
     .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
-  return [...sorted.map(m => m.toUpperCase()), key.toUpperCase()].join(' + ');
+  return [...sorted.map(m => MOD_DISPLAY[m] || m.toUpperCase()), key.toUpperCase()].join(' + ');
 }
 
 function formatActionCombo(row: CommandEntry): string {
-  const mods = [...(row.modifiers || [])]
-    .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
+  const mods = normalizeModifiers(row.modifiers || [], !!row.distinguish_sides);
   return formatComboText(mods, row.key || '?');
 }
 
@@ -545,7 +577,9 @@ function startActionRecording(row: CommandEntry) {
   comboCapturePending = true;
   comboCaptureRow = row;
   renderLexRows('action');
-  emit('drop-typing://start-combo-capture');
+  emit('drop-typing://start-combo-capture', {
+    distinguish_sides: !!row.distinguish_sides,
+  });
   comboCaptureTimer = window.setTimeout(() => {
     if (comboCapturePending) {
       comboCapturePending = false;
@@ -597,16 +631,26 @@ const kbOk = document.getElementById('kb-ok') as any;
 const kbCancel = document.getElementById('kb-cancel') as any;
 const kbClear = document.getElementById('kb-clear') as any;
 
-const KB_MOD_KEYS = ['Ctrl', 'Opt', 'Cmd', 'Shift'];
 const KB_LAYOUT = [
   ['Esc', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'],
   ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '⌫'],
   ['Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
   ['CapsLock', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'Enter'],
-  ['Shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'Shift'],
-  ['Ctrl', 'Opt', 'Cmd', 'Space', 'Cmd', 'Opt', 'Ctrl'],
+  ['LShift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'RShift'],
+  ['LCtrl', 'LOpt', 'LCmd', 'Space', 'RCmd', 'ROpt', 'RCtrl'],
   ['←', '↓', '↑', '→'],
 ];
+
+const KB_MOD_RESOLVE: Record<string, [string, string]> = {
+  LCtrl: ['ControlLeft', 'Control'],
+  RCtrl: ['ControlRight', 'Control'],
+  LShift: ['ShiftLeft', 'Shift'],
+  RShift: ['ShiftRight', 'Shift'],
+  LOpt: ['Alt', 'Option'],
+  ROpt: ['AltGr', 'Option'],
+  LCmd: ['MetaLeft', 'Command'],
+  RCmd: ['MetaRight', 'Command'],
+};
 
 let keyboardRow: CommandEntry | null = null;
 let keyboardMods: string[] = [];
@@ -635,15 +679,17 @@ function renderKeyboard() {
     const rowEl = document.createElement('div');
     rowEl.className = 'kb-row';
     for (const label of row) {
-      const isMod = KB_MOD_KEYS.includes(label);
+      const isMod = label in KB_MOD_RESOLVE;
       if (isMod) {
+        const sides = !!keyboardRow?.distinguish_sides;
+        const modValue = sides ? KB_MOD_RESOLVE[label][0] : KB_MOD_RESOLVE[label][1];
         const btn = document.createElement('button');
-        btn.className = 'kb-mod kb-key' + (keyboardMods.includes(label) ? ' active' : '');
-        btn.textContent = label;
+        btn.className = 'kb-mod kb-key' + (keyboardMods.includes(modValue) ? ' active' : '');
+        btn.textContent = MOD_DISPLAY[modValue] || modValue;
         btn.addEventListener('click', () => {
-          const i = keyboardMods.indexOf(label);
+          const i = keyboardMods.indexOf(modValue);
           if (i >= 0) keyboardMods.splice(i, 1);
-          else keyboardMods.push(label);
+          else keyboardMods.push(modValue);
           renderKeyboard();
         });
         rowEl.appendChild(btn);
@@ -673,7 +719,7 @@ function renderKeyboard() {
 
 function openKeyboard(row: CommandEntry) {
   keyboardRow = row;
-  keyboardMods = [...(row.modifiers || [])];
+  keyboardMods = normalizeModifiers(row.modifiers || [], !!row.distinguish_sides);
   keyboardKey = row.key || null;
   renderKeyboard();
   dlgKeyboard.show();
@@ -722,7 +768,7 @@ function commandRows(kind: string): CommandEntry[] {
 
 function addLexRow(kind: string) {
   const empty: CommandEntry =
-    kind === 'action' ? { phrase: '', modifiers: ['Cmd'], key: 'C' }
+    kind === 'action' ? { phrase: '', modifiers: ['Command'], key: 'C' }
     : kind === 'modifier' ? { phrase: '', modifier: 'Cmd' }
     : kind === 'key' ? { phrase: '', name: 'DELETE' }
     : kind === 'homophone' ? { phrase: '', letter: 'A' }
@@ -825,6 +871,17 @@ function renderLexRows(kind: string) {
         kbBtn.textContent = '键盘选择';
         kbBtn.addEventListener('click', () => openKeyboard(row));
         el.appendChild(kbBtn);
+
+        const sideSwitch = document.createElement('sl-switch');
+        sideSwitch.className = 'lex-sides';
+        sideSwitch.size = 'small';
+        sideSwitch.checked = !!row.distinguish_sides;
+        sideSwitch.textContent = '区分左右';
+        sideSwitch.addEventListener('sl-change', () => {
+          row.distinguish_sides = sideSwitch.checked;
+          renderLexRows('action');
+        });
+        el.appendChild(sideSwitch);
       }
     } else if (kind === 'modifier') {
       const modSel = document.createElement('sl-select');
@@ -891,7 +948,7 @@ function buildCommandPayload() {
     countdown_ms: cmdCountdown.value ? parseInt(cmdCountdown.value, 10) : null,
     action: nonEmpty(commandConfig.action).map(a => ({
       phrase: a.phrase,
-      modifiers: a.modifiers || [],
+      modifiers: normalizeModifiers(a.modifiers || [], !!a.distinguish_sides),
       key: a.key || '',
       script: a.script || null,
     })),
@@ -926,6 +983,7 @@ listen<{ config: CommandConfigState; effective_command_countdown_ms: number }>(
         ...a,
         script: a.script || '',
         mode: a.script ? 'script' : 'hotkey',
+        distinguish_sides: isPreciseMods(a.modifiers),
       })),
       modifier: c.modifier || [],
       key: c.key || [],

@@ -174,6 +174,10 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 #   Opt  → ⌥ Option
 #   Ctrl → ⌃ Control
 #   Shift→ ⇧ Shift
+# 精确键（区分左右修饰键时使用）：
+#   CmdLeft/CmdRight、MetaLeft/MetaRight、OptLeft/OptRight、
+#   Alt（左 Opt）/ AltGr（右 Opt）、CtrlLeft/CtrlRight、ControlLeft/ControlRight、
+#   ShiftLeft/ShiftRight
 #
 # 键名（统一大写）：
 #   字母/数字     A-Z, 0-9

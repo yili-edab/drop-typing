@@ -106,9 +106,18 @@ fn enigo_key(name: &str) -> Result<Key> {
 fn modifier_key(m: &Modifier) -> Key {
     match m {
         Modifier::Command => Key::Control,
+        // 精确的 Meta = Win 键
+        Modifier::MetaLeft => Key::LWin,
+        Modifier::MetaRight => Key::RWin,
         Modifier::Control => Key::Control,
+        Modifier::ControlLeft => Key::LControl,
+        Modifier::ControlRight => Key::RControl,
         Modifier::Shift => Key::Shift,
+        Modifier::ShiftLeft => Key::LShift,
+        Modifier::ShiftRight => Key::RShift,
         Modifier::Option => Key::Alt,
+        Modifier::Alt => Key::LMenu,
+        Modifier::AltGr => Key::RMenu,
     }
 }
 

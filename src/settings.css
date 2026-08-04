@@ -365,6 +365,7 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .lex-phrase {
   flex: none;
@@ -408,6 +409,9 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   flex: none;
 }
 .lex-kb {
+  flex: none;
+}
+.lex-sides {
   flex: none;
 }
 .lex-del {

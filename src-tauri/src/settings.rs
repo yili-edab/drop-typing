@@ -1024,11 +1024,17 @@ pub fn register_settings_handlers(app: &AppHandle) {
 
     // ── 组合键录制（动作别名 / 快捷键面板）：开始
     let ah = app.clone();
-    app.listen("drop-typing://start-combo-capture", move |_| {
+    app.listen("drop-typing://start-combo-capture", move |ev| {
         eprintln!("[drop-typing] start-combo-capture received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let distinguish_sides = payload
+            .get("distinguish_sides")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let ah = ah.clone();
         std::thread::spawn(move || {
-            let result = hotkey::capture_combo(Duration::from_secs(10));
+            let result = hotkey::capture_combo(Duration::from_secs(10), distinguish_sides);
             let (success, modifiers, key, error) = match result {
                 Ok(c) => (true, c.modifiers, c.key, String::new()),
                 Err(e) => (false, Vec::new(), String::new(), e),

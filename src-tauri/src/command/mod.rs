@@ -24,9 +24,51 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Modifier {
     Command,
+    /// 左 ⌘（精确）
+    MetaLeft,
+    /// 右 ⌘（精确）
+    MetaRight,
     Shift,
+    ShiftLeft,
+    ShiftRight,
     Control,
+    ControlLeft,
+    ControlRight,
     Option,
+    /// 左 ⌥（精确，rdev Key::Alt）
+    Alt,
+    /// 右 ⌥（精确，rdev Key::AltGr）
+    AltGr,
+}
+
+impl Modifier {
+    /// 展示用短名：家族级为 CTRL/OPT/SHIFT/CMD，精确级带 L-/R- 前缀。
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Modifier::Control => "CTRL",
+            Modifier::ControlLeft => "L-CTRL",
+            Modifier::ControlRight => "R-CTRL",
+            Modifier::Option => "OPT",
+            Modifier::Alt => "L-OPT",
+            Modifier::AltGr => "R-OPT",
+            Modifier::Shift => "SHIFT",
+            Modifier::ShiftLeft => "L-SHIFT",
+            Modifier::ShiftRight => "R-SHIFT",
+            Modifier::Command => "CMD",
+            Modifier::MetaLeft => "L-CMD",
+            Modifier::MetaRight => "R-CMD",
+        }
+    }
+
+    /// 展示排序：家族在前，左右紧随其后（CTRL → L/R-CTRL → OPT → ...）
+    fn display_rank(self) -> u8 {
+        match self {
+            Modifier::Control | Modifier::ControlLeft | Modifier::ControlRight => 0,
+            Modifier::Option | Modifier::Alt | Modifier::AltGr => 1,
+            Modifier::Shift | Modifier::ShiftLeft | Modifier::ShiftRight => 2,
+            Modifier::Command | Modifier::MetaLeft | Modifier::MetaRight => 3,
+        }
+    }
 }
 
 /// 一个解析完成的按键组合：若干修饰键 + 一个目标键。
@@ -41,23 +83,9 @@ pub struct KeyCombo {
 impl KeyCombo {
     /// 展示用文本，如 "CMD+C" / "SHIFT+CMD+E" / "ENTER"
     pub fn display(&self) -> String {
-        let mut parts: Vec<&str> = Vec::new();
-        // 按 macOS 惯例顺序 ⌃ ⌥ ⇧ ⌘ 输出
-        for m in [
-            Modifier::Control,
-            Modifier::Option,
-            Modifier::Shift,
-            Modifier::Command,
-        ] {
-            if self.modifiers.contains(&m) {
-                parts.push(match m {
-                    Modifier::Control => "CTRL",
-                    Modifier::Option => "OPT",
-                    Modifier::Shift => "SHIFT",
-                    Modifier::Command => "CMD",
-                });
-            }
-        }
+        let mut mods = self.modifiers.clone();
+        mods.sort_by_key(|m| m.display_rank());
+        let parts: Vec<&str> = mods.iter().map(|m| m.display_name()).collect();
         if parts.is_empty() {
             self.key.clone()
         } else {
@@ -341,6 +369,15 @@ mod tests {
         assert_eq!(disp("Command Shift P").as_deref(), Some("SHIFT+CMD+P"));
         assert_eq!(disp("control option f5").as_deref(), Some("CTRL+OPT+F5"));
         assert_eq!(disp("cmd space").as_deref(), Some("CMD+SPACE"));
+    }
+
+    #[test]
+    fn precise_modifier_display() {
+        let combo = KeyCombo {
+            modifiers: vec![Modifier::ControlRight, Modifier::ShiftLeft],
+            key: "4".to_string(),
+        };
+        assert_eq!(combo.display(), "R-CTRL+L-SHIFT+4");
     }
 
     #[test]

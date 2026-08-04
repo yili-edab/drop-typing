@@ -192,9 +192,21 @@ impl<'de> Deserialize<'de> for Modifier {
         let s = String::deserialize(deserializer)?;
         match s.to_ascii_lowercase().as_str() {
             "command" | "cmd" | "meta" | "super" | "win" => Ok(Modifier::Command),
+            "commandleft" | "cmdleft" | "metaleft" | "superleft" | "winleft" => {
+                Ok(Modifier::MetaLeft)
+            }
+            "commandright" | "cmdright" | "metaright" | "superright" | "winright" => {
+                Ok(Modifier::MetaRight)
+            }
             "shift" => Ok(Modifier::Shift),
+            "shiftleft" => Ok(Modifier::ShiftLeft),
+            "shiftright" => Ok(Modifier::ShiftRight),
             "control" | "ctrl" | "ctl" => Ok(Modifier::Control),
+            "controlleft" | "ctrlleft" | "ctlleft" => Ok(Modifier::ControlLeft),
+            "controlright" | "ctrlright" | "ctlright" => Ok(Modifier::ControlRight),
             "option" | "opt" | "alt" => Ok(Modifier::Option),
+            "optionleft" | "optleft" | "altleft" => Ok(Modifier::Alt),
+            "optionright" | "optright" | "altright" | "altgr" => Ok(Modifier::AltGr),
             _ => Err(serde::de::Error::custom(format!(
                 "无法识别的修饰键 '{s}'。可选：Cmd, Ctrl, Opt, Shift（大小写不敏感）"
             ))),
@@ -656,6 +668,26 @@ mod tests {
         let a = &cfg.command.action[0];
         assert_eq!(a.phrase, "跑备份");
         assert_eq!(a.script.as_deref(), Some("/bin/sh backup.sh"));
+    }
+
+    #[test]
+    fn parse_config_file_accepts_precise_modifiers() {
+        let raw = "[[command.action]]\nphrase = \"测试\"\nmodifiers = [\"ControlRight\", \"ShiftLeft\"]\nkey = \"4\"\n";
+        let cfg = parse_config_file(raw).expect("合法 TOML 应解析成功");
+        assert_eq!(
+            cfg.command.action[0].modifiers,
+            vec![Modifier::ControlRight, Modifier::ShiftLeft]
+        );
+    }
+
+    #[test]
+    fn parse_precise_modifier_aliases() {
+        let raw = "[[command.action]]\nphrase = \"测试\"\nmodifiers = [\"CmdRight\", \"AltGr\"]\nkey = \"C\"\n";
+        let cfg = parse_config_file(raw).expect("合法 TOML 应解析成功");
+        assert_eq!(
+            cfg.command.action[0].modifiers,
+            vec![Modifier::MetaRight, Modifier::AltGr]
+        );
     }
 
     #[test]

@@ -128,9 +128,18 @@ fn enigo_key(name: &str) -> Result<Key> {
 fn modifier_key(m: &Modifier) -> Key {
     match m {
         Modifier::Command => Key::Meta,
+        // 左 ⌘ / 左 ⌥ 无精确键位，回退到通用键（效果一致）
+        Modifier::MetaLeft => Key::Meta,
+        Modifier::MetaRight => Key::RCommand,
         Modifier::Shift => Key::Shift,
+        Modifier::ShiftLeft => Key::LShift,
+        Modifier::ShiftRight => Key::RShift,
         Modifier::Control => Key::Control,
+        Modifier::ControlLeft => Key::LControl,
+        Modifier::ControlRight => Key::RControl,
         Modifier::Option => Key::Option,
+        Modifier::Alt => Key::Option,
+        Modifier::AltGr => Key::ROption,
     }
 }
 

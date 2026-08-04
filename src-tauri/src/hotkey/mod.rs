@@ -439,6 +439,27 @@ fn modifier_name(f: ModFamily) -> &'static str {
     }
 }
 
+/// 录制时修饰键输出名：区分左右时用精确键名（ControlLeft 等），否则用家族短名。
+pub(crate) fn modifier_capture_name(key: &Key, sides: bool) -> &'static str {
+    if !sides {
+        return match family_of(key) {
+            Some(f) => modifier_name(f),
+            None => "",
+        };
+    }
+    match key {
+        Key::ControlLeft => "ControlLeft",
+        Key::ControlRight => "ControlRight",
+        Key::MetaLeft => "MetaLeft",
+        Key::MetaRight => "MetaRight",
+        Key::ShiftLeft => "ShiftLeft",
+        Key::ShiftRight => "ShiftRight",
+        Key::Alt => "Alt",
+        Key::AltGr => "AltGr",
+        _ => "",
+    }
+}
+
 /// 判断按键属于哪个修饰键家族（非修饰键返回 None）。
 pub(crate) fn family_of(key: &Key) -> Option<ModFamily> {
     if ModFamily::Control.matches(key) {
@@ -492,13 +513,13 @@ pub(crate) fn map_rdev_key(key: &Key) -> Option<String> {
 ///
 /// 复用应用已有的全局热键监听：录制期间主监听把原始事件转发到这里，
 /// 同时不再把按键当作业务热键处理；Escape 或超时（默认 10 秒）结束。
-pub fn capture_combo(timeout: Duration) -> Result<CapturedCombo, String> {
+pub fn capture_combo(timeout: Duration, distinguish_sides: bool) -> Result<CapturedCombo, String> {
     CAPTURE_ACTIVE.store(true, Ordering::SeqCst);
     CAPTURE_CANCEL.store(false, Ordering::SeqCst);
     let (tx, rx) = mpsc::channel::<rdev::Event>();
     *capture_sender().lock().unwrap() = Some(tx);
 
-    let mut held: Vec<ModFamily> = Vec::new();
+    let mut held: Vec<&'static str> = Vec::new();
     let deadline = Instant::now() + timeout;
     let result = loop {
         if CAPTURE_CANCEL.load(Ordering::SeqCst) {
@@ -518,20 +539,19 @@ pub fn capture_combo(timeout: Duration) -> Result<CapturedCombo, String> {
                     break Err("已取消".to_string());
                 }
                 if let Some(f) = family_of(key) {
-                    if !held.contains(&f) {
-                        held.push(f);
+                    let name = modifier_capture_name(key, distinguish_sides);
+                    if !held.contains(&name) {
+                        held.push(name);
                     }
                 } else if let Some(name) = map_rdev_key(key) {
-                    let modifiers = held
-                        .iter()
-                        .map(|f| modifier_name(*f).to_string())
-                        .collect();
+                    let modifiers = held.iter().map(|s| s.to_string()).collect();
                     break Ok(CapturedCombo { modifiers, key: name });
                 }
             }
             EventType::KeyRelease(key) => {
                 if let Some(f) = family_of(key) {
-                    held.retain(|x| *x != f);
+                    let name = modifier_capture_name(key, distinguish_sides);
+                    held.retain(|x| *x != name);
                 }
             }
             _ => {}
@@ -578,5 +598,15 @@ mod tests {
         assert_eq!(family_of(&Key::AltGr), Some(ModFamily::Alt));
         assert_eq!(family_of(&Key::ControlRight), Some(ModFamily::Control));
         assert_eq!(family_of(&Key::KeyA), None);
+    }
+
+    #[test]
+    fn capture_names_respect_sides() {
+        assert_eq!(modifier_capture_name(&Key::ControlLeft, true), "ControlLeft");
+        assert_eq!(modifier_capture_name(&Key::ControlLeft, false), "Ctrl");
+        assert_eq!(modifier_capture_name(&Key::ControlRight, true), "ControlRight");
+        assert_eq!(modifier_capture_name(&Key::MetaRight, true), "MetaRight");
+        assert_eq!(modifier_capture_name(&Key::AltGr, true), "AltGr");
+        assert_eq!(modifier_capture_name(&Key::AltGr, false), "Opt");
     }
 }
