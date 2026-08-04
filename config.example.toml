@@ -212,8 +212,10 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # modifiers = ["Shift", "Cmd"]
 # key = "4"
 #
-# # 动作别名（脚本执行，预留）：说“跑备份” → 执行脚本。
-# # 当前版本解析到后仅提示「即将上线」，不会模拟按键，也不会执行脚本。
+# # 动作别名（脚本执行）：说“跑备份” → 执行脚本（不模拟按键）。
+# # script 支持两种写法：
+# #   - 已存在的脚本文件路径（绝对路径或 ~ 开头，按 shebang 执行，需 chmod +x）
+# #   - 一行 shell 命令，如 "open https://example.com"（交给 /bin/zsh -lc 执行）
 # [[command.action]]
 # phrase = "跑备份"
 # modifiers = []

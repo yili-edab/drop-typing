@@ -22,6 +22,7 @@ pub mod inject;
 pub mod llm;
 pub mod pipeline;
 pub mod prompts;
+pub mod script;
 pub mod settings;
 pub mod staging;
 pub mod wakeword;

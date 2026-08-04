@@ -30,6 +30,7 @@ use crate::hotkey::{self, HotkeyEvent};
 use crate::inject::{self, Injector};
 use crate::llm::{self, TextCleaner};
 use crate::prompts;
+use crate::script;
 use crate::staging::Staging;
 use crate::wakeword::{self, WakeEvent, WakeWord};
 
@@ -1616,7 +1617,8 @@ fn repair_and_replace(
     });
 }
 
-/// 指令通道（M4）：ASR 文本 → 本地解析 → 暂存条大字展示 + 右侧秒级倒计时 → 自动模拟按键。
+/// 指令通道（M4）：ASR 文本 → 本地解析 → 暂存条大字展示 + 右侧秒级倒计时 →
+/// 自动模拟按键或执行脚本。
 ///
 /// 倒计时期间用户按下任意一个右修饰键（开始新录音）即作废本次指令：
 /// 通过 `gen` 代次比对实现（Down 事件会 bump 代次）。
@@ -1629,14 +1631,8 @@ fn run_command(
     lexicon: &command::Lexicon,
 ) {
     staging.set_status("");
-    let combo = match command::parse(text, lexicon) {
-        Some(command::ParsedCommand::Combo(c)) => c,
-        Some(command::ParsedCommand::Script(path)) => {
-            staging.error(&format!(
-                "指令关联了脚本「{path}」，脚本执行功能即将上线（当前未执行任何操作）"
-            ));
-            return;
-        }
+    let parsed = match command::parse(text, lexicon) {
+        Some(parsed) => parsed,
         None => {
             staging.error(&format!("未识别到按键指令：{text}"));
             return;
@@ -1645,7 +1641,7 @@ fn run_command(
 
     // 倒计时秒数（不足 1 秒按 1 秒计；配 0 则立即执行）
     let mut remaining = (countdown.as_millis() as u64 + 999) / 1000;
-    staging.show_command(&combo.display(), remaining);
+    staging.show_command(&parsed.display(), remaining);
 
     let staging = staging.clone();
     let injector = injector.clone();
@@ -1661,19 +1657,43 @@ fn run_command(
             }
             staging.command_tick(remaining);
         }
-        match injector.simulate_combo(&combo) {
-            Ok(()) => {
-                staging.committed();
-                // 短暂停留让用户看到"已执行"反馈，再清除指令展示并隐藏
-                std::thread::sleep(Duration::from_millis(600));
-                if gen.load(Ordering::SeqCst) == my_gen {
-                    staging.clear_command();
-                    staging.hide();
+        match parsed {
+            command::ParsedCommand::Combo(combo) => {
+                match injector.simulate_combo(&combo) {
+                    Ok(()) => {
+                        staging.committed();
+                        // 短暂停留让用户看到"已执行"反馈，再清除指令展示并隐藏
+                        std::thread::sleep(Duration::from_millis(600));
+                        if gen.load(Ordering::SeqCst) == my_gen {
+                            staging.clear_command();
+                            staging.hide();
+                        }
+                    }
+                    Err(e) => {
+                        staging.clear_command();
+                        staging.error(&format!("按键模拟失败：{e:#}"));
+                    }
                 }
             }
-            Err(e) => {
-                staging.clear_command();
-                staging.error(&format!("按键模拟失败：{e:#}"));
+            command::ParsedCommand::Script(script_value) => {
+                staging.set_status("执行中");
+                match script::run(&script_value) {
+                    Ok(()) => {
+                        staging.set_status("");
+                        staging.committed();
+                        // 与按键指令一致：短暂停留让用户看到"已执行"反馈，再清除并隐藏
+                        std::thread::sleep(Duration::from_millis(600));
+                        if gen.load(Ordering::SeqCst) == my_gen {
+                            staging.clear_command();
+                            staging.hide();
+                        }
+                    }
+                    Err(e) => {
+                        staging.set_status("");
+                        staging.clear_command();
+                        staging.error(&format!("脚本执行失败：{e}"));
+                    }
+                }
             }
         }
     });

@@ -1000,7 +1000,7 @@ function renderLexRows(kind: string) {
         const scriptInput = document.createElement('sl-input');
         scriptInput.className = 'lex-script';
         scriptInput.size = 'small';
-        scriptInput.placeholder = '/path/to/script.sh';
+        scriptInput.placeholder = '/path/to/script.sh 或 shell 命令';
         scriptInput.value = row.script || '';
         scriptInput.addEventListener('sl-input', (e: any) => {
           row.script = e.target.value?.trim() || '';

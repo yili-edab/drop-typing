@@ -43,7 +43,9 @@ pub struct CommandActionEntry {
     #[serde(default)]
     pub modifiers: Vec<Modifier>,
     pub key: String,
-    /// 预留的脚本执行钩子：配置后该别名优先执行脚本（当前版本提示未支持，不做按键模拟）
+    /// 脚本执行钩子：配置后该别名优先执行脚本（不模拟按键）。
+    /// 支持两种写法：已存在的脚本文件路径（绝对路径或 `~/` 开头，按 shebang 执行，
+    /// 需 chmod +x）；或一行 shell 命令（交给 /bin/zsh -lc 执行）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
 }
