@@ -368,6 +368,7 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
 }
 .lex-phrase {
   flex: 1;
+  min-width: 0;
 }
 .lex-mods {
   width: 200px;
@@ -376,15 +377,31 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   width: 130px;
 }
 .lex-mode {
-  width: 110px;
+  width: 96px;
   flex: none;
 }
-.lex-combo {
-  width: 220px;
+.lex-combo-display {
   flex: none;
+  width: 170px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--sl-color-primary-700);
+  background: var(--sl-color-primary-50);
+  border: 1px solid var(--sl-color-primary-200);
+  border-radius: 6px;
+  padding: 7px 10px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lex-combo-display.empty {
+  color: var(--sl-color-neutral-400);
+  background: var(--sl-color-neutral-100);
+  border-color: var(--sl-color-neutral-200);
 }
 .lex-script {
-  width: 260px;
+  width: 200px;
   flex: none;
 }
 .lex-rec {
@@ -397,24 +414,10 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   flex: none;
 }
 
-/* ---- 可视化键盘选择器 ---- */
-.kb-modifiers {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
-  flex-wrap: wrap;
-}
+/* ---- 可视化键盘选择器（标准键盘布局） ---- */
 .kb-mod {
-  appearance: none;
-  border: 1px solid var(--sl-color-neutral-300);
-  background: var(--sl-color-neutral-0);
-  border-radius: 8px;
-  padding: 8px 18px;
-  font-size: 13px;
+  min-width: 52px;
   font-weight: 600;
-  cursor: pointer;
-  color: var(--sl-color-neutral-700);
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .kb-mod:hover {
   border-color: var(--sl-color-primary-400);
@@ -455,6 +458,27 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   background: var(--sl-color-primary-600);
   border-color: var(--sl-color-primary-600);
   color: #fff;
+}
+.kb-mod {
+  min-width: 52px;
+  font-weight: 600;
+}
+.kb-mod.active {
+  background: var(--sl-color-primary-600);
+  border-color: var(--sl-color-primary-600);
+  color: #fff;
+}
+.kb-mod:hover {
+  border-color: var(--sl-color-primary-400);
+}
+.kb-wide {
+  flex: 1 1 auto;
+  min-width: 110px;
+  max-width: 240px;
+}
+.kb-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .kb-preview {
   font-size: 14px;

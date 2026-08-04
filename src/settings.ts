@@ -585,50 +585,75 @@ listen<{ success: boolean; modifiers: string[]; key: string; error?: string }>(
 // ── 可视化键盘选择器（点按组合键，不依赖实体按键） ──
 
 const dlgKeyboard = document.getElementById('dlg-keyboard') as any;
-const kbModifiersEl = document.getElementById('kb-modifiers')!;
 const kbKeysEl = document.getElementById('kb-keys')!;
 const kbPreviewText = document.getElementById('kb-preview-text')!;
 const kbOk = document.getElementById('kb-ok') as any;
 const kbCancel = document.getElementById('kb-cancel') as any;
 
-const KB_MOD_KEYS = ['Ctrl', 'Opt', 'Shift', 'Cmd'];
+const KB_MOD_KEYS = ['Ctrl', 'Opt', 'Cmd', 'Shift'];
 const KB_LAYOUT = [
-  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-  ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
-  ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
-  ['Z', 'X', 'C', 'V', 'B', 'N', 'M'],
-  ['Tab', 'Space', 'Enter', 'Delete', 'Up', 'Down', 'Left', 'Right'],
+  ['Esc', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'],
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '⌫'],
+  ['Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+  ['CapsLock', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'Enter'],
+  ['Shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'Shift'],
+  ['Ctrl', 'Opt', 'Cmd', 'Space', 'Cmd', 'Opt', 'Ctrl'],
+  ['←', '↓', '↑', '→'],
 ];
 
 let keyboardRow: CommandEntry | null = null;
 let keyboardMods: string[] = [];
 let keyboardKey: string | null = null;
 
-function renderKeyboard() {
-  kbModifiersEl.innerHTML = '';
-  for (const m of KB_MOD_KEYS) {
-    const btn = document.createElement('button');
-    btn.className = 'kb-mod' + (keyboardMods.includes(m) ? ' active' : '');
-    btn.textContent = m;
-    btn.addEventListener('click', () => {
-      const i = keyboardMods.indexOf(m);
-      if (i >= 0) keyboardMods.splice(i, 1);
-      else keyboardMods.push(m);
-      renderKeyboard();
-    });
-    kbModifiersEl.appendChild(btn);
-  }
+function kbKeySupported(label: string): boolean {
+  const value = kbKeyValue(label);
+  if (/^[A-Z0-9]$/.test(value)) return true;
+  if (/^F([1-9]|1[0-2])$/.test(value)) return true;
+  return ['ENTER', 'SPACE', 'TAB', 'ESC', 'DELETE', 'UP', 'DOWN', 'LEFT', 'RIGHT'].includes(value);
+}
 
+function kbKeyValue(label: string): string {
+  if (label === '⌫') return 'DELETE';
+  const arrowMap: Record<string, string> = {
+    '←': 'LEFT', '↓': 'DOWN', '↑': 'UP', '→': 'RIGHT',
+  };
+  if (arrowMap[label]) return arrowMap[label];
+  if (label === 'Esc') return 'ESC';
+  return label.toUpperCase();
+}
+
+function renderKeyboard() {
   kbKeysEl.innerHTML = '';
   for (const row of KB_LAYOUT) {
     const rowEl = document.createElement('div');
     rowEl.className = 'kb-row';
-    for (const k of row) {
+    for (const label of row) {
+      const isMod = KB_MOD_KEYS.includes(label);
+      if (isMod) {
+        const btn = document.createElement('button');
+        btn.className = 'kb-mod kb-key' + (keyboardMods.includes(label) ? ' active' : '');
+        btn.textContent = label;
+        btn.addEventListener('click', () => {
+          const i = keyboardMods.indexOf(label);
+          if (i >= 0) keyboardMods.splice(i, 1);
+          else keyboardMods.push(label);
+          renderKeyboard();
+        });
+        rowEl.appendChild(btn);
+        continue;
+      }
+
+      const supported = kbKeySupported(label);
       const btn = document.createElement('button');
-      btn.className = 'kb-key' + (keyboardKey === k ? ' active' : '');
-      btn.textContent = k;
+      btn.className = 'kb-key'
+        + (keyboardKey === kbKeyValue(label) ? ' active' : '')
+        + (label === 'Space' ? ' kb-wide' : '')
+        + (supported ? '' : ' kb-disabled');
+      btn.textContent = label;
+      btn.title = supported ? '' : '暂不支持该按键';
+      btn.disabled = !supported;
       btn.addEventListener('click', () => {
-        keyboardKey = k;
+        keyboardKey = kbKeyValue(label);
         renderKeyboard();
       });
       rowEl.appendChild(btn);
@@ -761,14 +786,11 @@ function renderLexRows(kind: string) {
         });
         el.appendChild(scriptInput);
       } else {
-        // 快捷键：单个字段展示 + 直接录制
-        const comboInput = document.createElement('sl-input');
-        comboInput.className = 'lex-combo';
-        comboInput.size = 'small';
-        comboInput.readonly = true;
-        comboInput.placeholder = '点击「录制」';
-        comboInput.value = formatActionCombo(row);
-        el.appendChild(comboInput);
+        // 快捷键：单个只读展示（非输入框）+ 直接录制
+        const comboDisplay = document.createElement('span');
+        comboDisplay.className = 'lex-combo-display' + (row.key ? '' : ' empty');
+        comboDisplay.textContent = row.key ? formatActionCombo(row) : '未设置';
+        el.appendChild(comboDisplay);
 
         const recBtn = document.createElement('sl-button');
         recBtn.className = 'lex-rec';
