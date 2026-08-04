@@ -6,23 +6,39 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 const bar = document.getElementById("bar") as HTMLDivElement;
 const finalEl = document.getElementById("final") as HTMLSpanElement;
 const partEl = document.getElementById("part") as HTMLSpanElement;
+const textEl = document.getElementById("text") as HTMLDivElement;
 const statusEl = document.getElementById("status") as HTMLDivElement;
 const repairNoteEl = document.getElementById("repair-note") as HTMLDivElement;
 const commandEl = document.getElementById("command") as HTMLDivElement;
 const countdownEl = document.getElementById("countdown") as HTMLDivElement;
 
 const PLACEHOLDER = "按住右 ⌘ 说话，短按提交";
-const BAR_MAX_HEIGHT = 260;
+const BAR_MAX_HEIGHT = 520;
 
 let currentText = "";
 let partialText = "";
 let committedTimer: number | undefined;
+let lastSentSize = { width: 0, height: 0 };
+
+// 流式输出时始终贴底显示，避免内容停留在中间
+function scrollTextBottom() {
+  textEl.scrollTop = textEl.scrollHeight;
+}
 
 function resize() {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      const h = Math.min(bar.scrollHeight, BAR_MAX_HEIGHT) + 12;
-      emit("drop-typing://resize", { height: h });
+      scrollTextBottom();
+      const rect = bar.getBoundingClientRect();
+      const w = Math.min(Math.max(rect.width + 12, 300), 1280);
+      const h = Math.min(Math.max(rect.height + 12, 60), BAR_MAX_HEIGHT);
+      if (
+        Math.abs(w - lastSentSize.width) > 1 ||
+        Math.abs(h - lastSentSize.height) > 1
+      ) {
+        lastSentSize = { width: w, height: h };
+        emit("drop-typing://resize", { width: w, height: h });
+      }
     });
   });
 }

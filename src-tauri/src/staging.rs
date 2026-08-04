@@ -2,25 +2,24 @@
 //!
 //! 文本归属 Rust 侧（单一事实来源），前端只负责渲染事件。
 //!
-//! 定位：窗口固定 MAX_HEIGHT，底部居中一次定位后不再移动。
-//! 内容变化由 CSS（align-items: flex-end）在窗口内自然向上生长，
-//! 无需 Rust 侧 resize/reposition。
+//! 定位：窗口按内容收缩（前端测量后经 `drop-typing://resize` 通知），
+//! 底部居中锚定；透明区域不超出暂存条本身，避免遮挡后面的应用。
 
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition};
+use tauri::{AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition};
 
 /// 暂存条窗口宽度（逻辑像素）
-pub(crate) const WIN_WIDTH: f64 = 640.0;
+pub(crate) const WIN_WIDTH: f64 = 1280.0;
 /// 底部居中时距屏幕底部的偏移（逻辑像素）。
 /// macOS 预留 Dock 区域，Windows 预留任务栏 + 安全边距。
 #[cfg(target_os = "macos")]
 pub(crate) const BOTTOM_OFFSET: f64 = 110.0;
 #[cfg(target_os = "windows")]
 pub(crate) const BOTTOM_OFFSET: f64 = 96.0;
-/// 窗口高度夹取范围（一行约 60px，最多 ~92px / ~4 行）
+/// 窗口高度夹取范围（一行约 60px，最大 544px）
 pub(crate) const MIN_HEIGHT: f64 = 60.0;
-pub(crate) const MAX_HEIGHT: f64 = 272.0;
+pub(crate) const MAX_HEIGHT: f64 = 544.0;
 
 #[derive(Clone)]
 pub struct Staging {
@@ -49,6 +48,22 @@ impl Staging {
             st.dismiss();
         });
 
+        // 前端内容尺寸变化 → 收缩窗口贴合暂存条（透明区域不再遮挡点击）
+        let st = staging.clone();
+        app.listen("drop-typing://resize", move |ev| {
+            let payload: serde_json::Value =
+                serde_json::from_str(ev.payload()).unwrap_or_default();
+            let width = payload
+                .get("width")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(WIN_WIDTH);
+            let height = payload
+                .get("height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(MAX_HEIGHT);
+            st.set_content_size(width, height);
+        });
+
         staging
     }
 
@@ -59,12 +74,11 @@ impl Staging {
     // ---------- 显隐与定位 ----------
 
     /// 显示暂存条：底部居中，距屏幕底边 BOTTOM_OFFSET。
-    /// 窗口高度固定为 MAX_HEIGHT，内容由 CSS 在窗口内向上生长，不再 resize。
     pub fn show(&self) {
         self.show_at_bottom()
     }
 
-    /// 底部居中定位（窗口高度 = MAX_HEIGHT，只定位一次）。
+    /// 底部居中定位（按当前窗口实际大小）。
     /// 窗口已可见时跳过——位置只设一次，杜绝重复 set_position 导致漂移。
     fn show_at_bottom(&self) {
         let Some(win) = self.window() else { return };
@@ -76,15 +90,38 @@ impl Staging {
             let scale = monitor.scale_factor();
             let screen = monitor.size();
             let mpos = monitor.position();
+            let size = win.outer_size().unwrap_or_default();
+            let w = size.width as f64 / scale;
+            let h = size.height as f64 / scale;
             // 窗口底边 = 屏幕底边 - BOTTOM_OFFSET
-            let x = mpos.x as f64 + (screen.width as f64 - WIN_WIDTH * scale) / 2.0;
-            let y = mpos.y as f64 + screen.height as f64 - (BOTTOM_OFFSET + MAX_HEIGHT) * scale;
+            let x = mpos.x as f64 + (screen.width as f64 - w * scale) / 2.0;
+            let y = mpos.y as f64 + screen.height as f64 - (BOTTOM_OFFSET + h) * scale;
             let _ = win.set_position(PhysicalPosition::new(
                 x.max(0.0) as i32,
                 y.max(0.0) as i32,
             ));
         }
         let _ = win.show();
+    }
+
+    /// 按前端测量的内容尺寸收缩窗口，并保持底部居中。
+    pub fn set_content_size(&self, width: f64, height: f64) {
+        let Some(win) = self.window() else { return };
+        let w = width.clamp(120.0, WIN_WIDTH);
+        let h = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+        let _ = win.set_size(LogicalSize::new(w, h));
+
+        if let Ok(Some(monitor)) = win.current_monitor() {
+            let scale = monitor.scale_factor();
+            let screen = monitor.size();
+            let mpos = monitor.position();
+            let x = mpos.x as f64 + (screen.width as f64 - w * scale) / 2.0;
+            let y = mpos.y as f64 + screen.height as f64 - (BOTTOM_OFFSET + h) * scale;
+            let _ = win.set_position(PhysicalPosition::new(
+                x.max(0.0) as i32,
+                y.max(0.0) as i32,
+            ));
+        }
     }
 
     pub fn hide(&self) {
