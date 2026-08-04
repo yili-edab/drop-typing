@@ -240,3 +240,141 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   background: var(--sl-color-neutral-50);
   margin-top: 10px;
 }
+
+/* ---- AI 提示词 ---- */
+.style-current-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.style-current-row label {
+  font-size: 14px;
+  font-weight: 600;
+}
+#style-select-settings {
+  width: 200px;
+}
+.style-current-row .help {
+  flex-basis: 100%;
+  margin-bottom: 0;
+}
+.panel-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 20px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--sl-color-neutral-200);
+  color: var(--sl-color-neutral-800);
+}
+.panel-section-title:first-child {
+  margin-top: 0;
+}
+
+/* ---- 通用表单网格（高级面板 / 唤醒词高级参数） ---- */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  margin: 12px 0;
+}
+.form-grid .help {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+}
+.advanced-details {
+  margin: 16px 0 4px;
+}
+.advanced-details::part(summary) {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---- 高级面板子 Tab ---- */
+.sub-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--sl-color-neutral-200);
+  padding-bottom: 8px;
+}
+.sub-tabs button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sl-color-neutral-600);
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.sub-tabs button:hover {
+  background: var(--sl-color-neutral-100);
+}
+.sub-tabs button.active {
+  background: var(--sl-color-primary-100);
+  color: var(--sl-color-primary-700);
+}
+.sub-panel {
+  display: none;
+}
+.sub-panel.active {
+  display: block;
+}
+
+/* ---- 语音控制：指令词表 ---- */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 16px;
+  flex-wrap: wrap;
+}
+.field-row sl-input {
+  width: 200px;
+}
+.field-row .help {
+  margin: 0;
+}
+
+#command-lexicon {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 12px;
+}
+.lex-block h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 2px;
+  color: var(--sl-color-neutral-800);
+}
+.lex-block .help {
+  margin-bottom: 8px;
+}
+.lex-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.lex-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lex-phrase {
+  flex: 1;
+}
+.lex-mods {
+  width: 200px;
+}
+.lex-key {
+  width: 130px;
+}
+.lex-del {
+  flex: none;
+}

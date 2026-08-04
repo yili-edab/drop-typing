@@ -15,6 +15,7 @@ import '@shoelace-style/shoelace/dist/components/input/input.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/select/select.js';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
+import '@shoelace-style/shoelace/dist/components/details/details.js';
 import { emit, listen } from '@tauri-apps/api/event';
 
 // ---- DOM ----
@@ -29,7 +30,7 @@ const dlgIntentInput = document.getElementById('dlg-intent-input') as any;
 const dlgAddStyle = document.getElementById('dlg-add-style') as any;
 const dlgAddStyleInput = document.getElementById('dlg-add-style-input') as any;
 
-const baseWrap = document.querySelector('#panel-base .editor-wrap')!;
+const baseWrap = document.getElementById('base-editor-wrap')!;
 const baseTextarea = document.getElementById('prompt-base') as HTMLTextAreaElement;
 const btnBaseReset = document.getElementById('btn-base-reset') as any;
 const btnBaseSave = document.getElementById('btn-base-save') as any;
@@ -37,11 +38,50 @@ const btnBaseAi = document.getElementById('btn-base-ai') as any;
 
 const styleTabsContainer = document.getElementById('style-tabs')!;
 const btnAddStyle = document.getElementById('btn-add-style') as any;
-const styleWrap = document.querySelector('#panel-advanced .editor-wrap')!;
+const styleWrap = document.getElementById('style-editor-wrap')!;
 const styleTextarea = document.getElementById('style-textarea') as HTMLTextAreaElement;
 const btnStyleReset = document.getElementById('btn-style-reset') as any;
 const btnStyleSave = document.getElementById('btn-style-save') as any;
 const btnStyleAi = document.getElementById('btn-style-ai') as any;
+
+const styleSelectSettings = document.getElementById('style-select-settings') as any;
+
+// ---- 语音控制面板 DOM ----
+const cmdCountdown = document.getElementById('cmd-countdown') as any;
+const cmdCountdownEffective = document.getElementById('cmd-countdown-effective')!;
+const btnCommandSave = document.getElementById('btn-command-save') as any;
+const btnCommandReset = document.getElementById('btn-command-reset') as any;
+
+// ---- 高级面板 DOM ----
+const asrProvider = document.getElementById('asr-provider') as any;
+const asrProtocol = document.getElementById('asr-protocol') as any;
+const asrModel = document.getElementById('asr-model') as any;
+const asrBaseUrl = document.getElementById('asr-base-url') as any;
+const asrApiKey = document.getElementById('asr-api-key') as any;
+const llmProvider = document.getElementById('llm-provider') as any;
+const llmProtocol = document.getElementById('llm-protocol') as any;
+const llmModel = document.getElementById('llm-model') as any;
+const llmBaseUrl = document.getElementById('llm-base-url') as any;
+const llmApiKey = document.getElementById('llm-api-key') as any;
+const llmStrength = document.getElementById('llm-strength') as any;
+const millisLongPress = document.getElementById('millis-long-press') as any;
+const millisDoublePress = document.getElementById('millis-double-press') as any;
+const millisCommandCountdown = document.getElementById('millis-command-countdown') as any;
+const btnGeneralSave = document.getElementById('btn-general-save') as any;
+const btnMillisSave = document.getElementById('btn-millis-save') as any;
+const btnTestAsr = document.getElementById('btn-test-asr') as any;
+const btnTestLlm = document.getElementById('btn-test-llm') as any;
+const configFileText = document.getElementById('config-file-text') as HTMLTextAreaElement;
+const btnConfigReload = document.getElementById('btn-config-reload') as any;
+const btnConfigSave = document.getElementById('btn-config-save') as any;
+
+// ---- 唤醒词高级参数 DOM ----
+const wwModelDir = document.getElementById('ww-model-dir') as any;
+const wwThreshold = document.getElementById('ww-threshold') as any;
+const wwScore = document.getElementById('ww-score') as any;
+const wwSilence = document.getElementById('ww-silence') as any;
+const wwPreRoll = document.getElementById('ww-pre-roll') as any;
+const wwRing = document.getElementById('ww-ring') as any;
 
 // ---- 状态 ----
 const BUILTIN_STYLE_KEYS = ['high_eq', 'low_eq', 'anti_pua', 'pua'];
@@ -218,6 +258,14 @@ document.querySelectorAll<HTMLElement>('#menu li[data-panel]').forEach(li => {
     if (id === 'shortcut' && !shortcutState.keyboard.trigger) {
       requestShortcutConfig();
     }
+    // 懒加载语音控制 / 高级面板配置
+    if (id === 'voice-command' && !commandLoaded) {
+      requestCommandConfig();
+    }
+    if (id === 'advanced' && !generalLoaded) {
+      requestGeneralConfig();
+      requestConfigFile();
+    }
   });
 });
 
@@ -360,6 +408,21 @@ listen<{
   }
   renderStyleTabs();
   fillTextareas();
+
+  // 设置页「当前润色样式」下拉与暂存条联动
+  styleSelectSettings.innerHTML = '<sl-option value="">无</sl-option>';
+  for (const s of stylesList) {
+    const opt = document.createElement('sl-option');
+    opt.value = s.key;
+    opt.textContent = s.label;
+    styleSelectSettings.appendChild(opt);
+  }
+  styleSelectSettings.value = e.payload.current || '';
+});
+
+styleSelectSettings.addEventListener('sl-change', () => {
+  const val = styleSelectSettings.value || null;
+  emit('drop-typing://select-style', { style: val });
 });
 
 // 添加样式结果
@@ -421,6 +484,229 @@ listen<{ key: string; optimized?: string; error?: string }>('drop-typing://ai-op
     toast('success', 'AI 优化完成');
   }
   stopLoading();
+});
+
+// ── 语音控制面板（Command） ──────────────────────────────────────────
+
+interface CommandEntry {
+  phrase: string;
+  modifiers?: string[];
+  key?: string;
+  modifier?: string;
+  name?: string;
+  letter?: string;
+}
+
+interface CommandConfigState {
+  countdown_ms: number | null;
+  action: CommandEntry[];
+  modifier: CommandEntry[];
+  key: CommandEntry[];
+  stop: CommandEntry[];
+  homophone: CommandEntry[];
+}
+
+const KEY_OPTIONS = [
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  ...'0123456789',
+  'ENTER', 'SPACE', 'TAB', 'ESC', 'DELETE',
+  'UP', 'DOWN', 'LEFT', 'RIGHT',
+  ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
+];
+const MOD_OPTIONS = ['Cmd', 'Opt', 'Ctrl', 'Shift'];
+const LETTER_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+let commandConfig: CommandConfigState = {
+  countdown_ms: null,
+  action: [],
+  modifier: [],
+  key: [],
+  stop: [],
+  homophone: [],
+};
+let commandLoaded = false;
+
+function requestCommandConfig() {
+  emit('drop-typing://get-command-config');
+}
+
+function commandRows(kind: string): CommandEntry[] {
+  return (commandConfig as any)[kind] || [];
+}
+
+function addLexRow(kind: string) {
+  const empty: CommandEntry =
+    kind === 'action' ? { phrase: '', modifiers: ['Cmd'], key: 'C' }
+    : kind === 'modifier' ? { phrase: '', modifier: 'Cmd' }
+    : kind === 'key' ? { phrase: '', name: 'DELETE' }
+    : kind === 'homophone' ? { phrase: '', letter: 'A' }
+    : { phrase: '' };
+  (commandConfig as any)[kind].push(empty);
+  renderLexRows(kind);
+}
+
+function makeKeySelect(initial: string, onChange: (v: string) => void): any {
+  const sel = document.createElement('sl-select');
+  sel.className = 'lex-key';
+  sel.size = 'small';
+  for (const k of KEY_OPTIONS) {
+    const o = document.createElement('sl-option');
+    o.value = k;
+    o.textContent = k;
+    sel.appendChild(o);
+  }
+  sel.value = initial;
+  sel.addEventListener('sl-change', (e: any) => onChange(e.target.value || initial));
+  return sel;
+}
+
+function renderLexRows(kind: string) {
+  const wrap = document.querySelector(`.lex-block[data-kind="${kind}"] .lex-rows`)!;
+  wrap.innerHTML = '';
+  commandRows(kind).forEach((row, idx) => {
+    const el = document.createElement('div');
+    el.className = 'lex-row';
+
+    const phrase = document.createElement('sl-input');
+    phrase.className = 'lex-phrase';
+    phrase.size = 'small';
+    phrase.placeholder = '短语';
+    phrase.value = row.phrase || '';
+    phrase.addEventListener('sl-input', (e: any) => {
+      row.phrase = e.target.value?.trim() || '';
+    });
+    el.appendChild(phrase);
+
+    if (kind === 'action') {
+      const mods = document.createElement('sl-select');
+      mods.className = 'lex-mods';
+      mods.size = 'small';
+      mods.multiple = true;
+      mods.placeholder = '修饰键';
+      for (const m of MOD_OPTIONS) {
+        const o = document.createElement('sl-option');
+        o.value = m;
+        o.textContent = m;
+        mods.appendChild(o);
+      }
+      mods.value = row.modifiers || [];
+      mods.addEventListener('sl-change', (e: any) => {
+        row.modifiers = [...(e.target.value || [])];
+      });
+      el.appendChild(mods);
+      el.appendChild(makeKeySelect(row.key || 'C', v => { row.key = v; }));
+    } else if (kind === 'modifier') {
+      const modSel = document.createElement('sl-select');
+      modSel.className = 'lex-key';
+      modSel.size = 'small';
+      for (const m of MOD_OPTIONS) {
+        const o = document.createElement('sl-option');
+        o.value = m;
+        o.textContent = m;
+        modSel.appendChild(o);
+      }
+      modSel.value = row.modifier || 'Cmd';
+      modSel.addEventListener('sl-change', (e: any) => {
+        row.modifier = e.target.value || 'Cmd';
+      });
+      el.appendChild(modSel);
+    } else if (kind === 'key') {
+      el.appendChild(makeKeySelect(row.name || 'DELETE', v => { row.name = v; }));
+    } else if (kind === 'homophone') {
+      const letterSel = document.createElement('sl-select');
+      letterSel.className = 'lex-key';
+      letterSel.size = 'small';
+      for (const l of LETTER_OPTIONS) {
+        const o = document.createElement('sl-option');
+        o.value = l;
+        o.textContent = l;
+        letterSel.appendChild(o);
+      }
+      letterSel.value = row.letter || 'A';
+      letterSel.addEventListener('sl-change', (e: any) => {
+        row.letter = e.target.value || 'A';
+      });
+      el.appendChild(letterSel);
+    }
+
+    const del = document.createElement('sl-button');
+    del.className = 'lex-del';
+    del.size = 'small';
+    del.variant = 'danger';
+    del.textContent = '删除';
+    del.addEventListener('click', () => {
+      (commandConfig as any)[kind].splice(idx, 1);
+      renderLexRows(kind);
+    });
+    el.appendChild(del);
+
+    wrap.appendChild(el);
+  });
+}
+
+function renderAllLex() {
+  for (const kind of ['action', 'modifier', 'key', 'stop', 'homophone']) {
+    renderLexRows(kind);
+  }
+}
+
+document.querySelectorAll<HTMLElement>('.lex-add').forEach(btn => {
+  btn.addEventListener('click', () => addLexRow(btn.dataset.kind || ''));
+});
+
+function buildCommandPayload() {
+  const nonEmpty = <T>(arr: T[]): T[] => arr.filter((x: any) => (x.phrase || '').trim());
+  return {
+    countdown_ms: cmdCountdown.value ? parseInt(cmdCountdown.value, 10) : null,
+    action: nonEmpty(commandConfig.action),
+    modifier: nonEmpty(commandConfig.modifier),
+    key: nonEmpty(commandConfig.key),
+    stop: nonEmpty(commandConfig.stop),
+    homophone: nonEmpty(commandConfig.homophone),
+  };
+}
+
+btnCommandSave.addEventListener('click', () => {
+  btnCommandSave.textContent = '保存中…';
+  btnCommandSave.disabled = true;
+  emit('drop-typing://save-command-config', buildCommandPayload());
+});
+
+btnCommandReset.addEventListener('click', async () => {
+  const ok = await showConfirm('确认清空用户指令词表并恢复内置默认？当前修改将丢失。');
+  if (!ok) return;
+  commandConfig = { countdown_ms: null, action: [], modifier: [], key: [], stop: [], homophone: [] };
+  cmdCountdown.value = '';
+  renderAllLex();
+  toast('success', '已清空，点击「保存」生效');
+});
+
+listen<{ config: CommandConfigState; effective_command_countdown_ms: number }>(
+  'drop-typing://command-config', (e) => {
+    const c = e.payload.config || {};
+    commandConfig = {
+      countdown_ms: c.countdown_ms ?? null,
+      action: c.action || [],
+      modifier: c.modifier || [],
+      key: c.key || [],
+      stop: c.stop || [],
+      homophone: c.homophone || [],
+    };
+    cmdCountdown.value = commandConfig.countdown_ms ? String(commandConfig.countdown_ms) : '';
+    cmdCountdownEffective.textContent = String(e.payload.effective_command_countdown_ms ?? 2000);
+    renderAllLex();
+    commandLoaded = true;
+  }
+);
+
+listen<{ success: boolean; error?: string }>('drop-typing://command-config-saved', (e) => {
+  btnCommandSave.textContent = '保存';
+  btnCommandSave.disabled = false;
+  if (e.payload.success) {
+    toast('success', '语音控制配置已保存并生效');
+  } else {
+    toast('danger', e.payload.error || '保存失败');
+  }
 });
 
 // ── 语音唤醒面板 ─────────────────────────────────────────────────────
@@ -521,6 +807,14 @@ btnWakewordSave.addEventListener('click', () => {
   emit('drop-typing://save-wakeword-config', {
     keywords,
     enabled: keywords.length > 0,
+    advanced: {
+      model_dir: wwModelDir.value,
+      keywords_threshold: parseFloat(wwThreshold.value),
+      keywords_score: parseFloat(wwScore.value),
+      silence_timeout_ms: parseInt(wwSilence.value, 10),
+      pre_roll_ms: parseInt(wwPreRoll.value, 10),
+      ring_buffer_duration_ms: parseInt(wwRing.value, 10),
+    },
   });
 });
 
@@ -573,13 +867,22 @@ listen<any>('drop-typing://wakeword-config', (e) => {
     }));
   }
   renderWakewordList();
+
+  const adv = d.advanced || {};
+  wwModelDir.value = adv.model_dir || '';
+  wwThreshold.value = adv.keywords_threshold ?? 0.25;
+  wwScore.value = adv.keywords_score ?? 1.0;
+  wwSilence.value = adv.silence_timeout_ms ?? 1500;
+  wwPreRoll.value = adv.pre_roll_ms ?? 500;
+  wwRing.value = adv.ring_buffer_duration_ms ?? 3000;
 });
 
 listen<any>('drop-typing://wakeword-saved', (e) => {
   btnWakewordSave.textContent = '保存';
   btnWakewordSave.disabled = false;
   if (e.payload.success) {
-    toast('success', '唤醒词配置已保存。请重启应用使配置生效。');
+    toast('success', '唤醒词配置已保存');
+    promptRestart('唤醒词配置需要重启应用后才能生效，是否立即重启？');
   } else {
     toast('danger', e.payload.error || '保存失败');
   }
@@ -1045,7 +1348,8 @@ listen<any>('drop-typing://shortcut-saved', (e) => {
   btnShortcutSave.textContent = '保存';
   btnShortcutSave.disabled = false;
   if (e.payload.success) {
-    toast('success', '快捷键已保存。请重启应用使配置生效。');
+    toast('success', '快捷键已保存');
+    promptRestart('快捷键配置需要重启应用后才能生效，是否立即重启？');
   } else {
     toast('danger', e.payload.error || '保存失败');
   }
@@ -1058,6 +1362,184 @@ listen<any>('drop-typing://shortcut-reset', (e) => {
   } else {
     toast('danger', e.payload.error || '重置失败');
   }
+});
+
+// ── 高级面板（模型 / 毫秒 / 配置文件） ─────────────────────────────────
+
+let generalConfig: any = null;
+let generalLoaded = false;
+let configFileLoaded = false;
+
+function requestGeneralConfig() {
+  emit('drop-typing://get-general-config');
+}
+
+function requestConfigFile() {
+  emit('drop-typing://get-config-file');
+}
+
+// 子 Tab 切换
+document.querySelectorAll<HTMLElement>('#advanced-tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const sub = btn.dataset.sub!;
+    document.querySelectorAll('#advanced-tabs button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.sub-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(`sub-${sub}`)!.classList.add('active');
+  });
+});
+
+function fillGeneralForm() {
+  if (!generalConfig) return;
+  const a = generalConfig.asr || {};
+  asrProvider.value = a.provider || '';
+  asrProtocol.value = a.protocol || 'dashscope-realtime';
+  asrModel.value = a.model || '';
+  asrBaseUrl.value = a.base_url || '';
+  asrApiKey.value = a.api_key || '';
+
+  const l = generalConfig.llm || {};
+  llmProvider.value = l.provider || '';
+  llmProtocol.value = l.protocol || 'openai-chat';
+  llmModel.value = l.model || '';
+  llmBaseUrl.value = l.base_url || '';
+  llmApiKey.value = l.api_key || '';
+  llmStrength.value = l.strength || 'standard';
+
+  const t = generalConfig.thresholds || {};
+  millisLongPress.value = t.long_press_threshold_ms ?? 150;
+  millisDoublePress.value = t.double_press_window_ms ?? 350;
+  millisCommandCountdown.value = t.command_countdown_ms ?? 2000;
+}
+
+function collectGeneralPayload() {
+  return {
+    asr: {
+      provider: asrProvider.value,
+      protocol: asrProtocol.value,
+      model: asrModel.value,
+      base_url: asrBaseUrl.value,
+      api_key: asrApiKey.value,
+    },
+    llm: {
+      provider: llmProvider.value,
+      protocol: llmProtocol.value,
+      model: llmModel.value,
+      base_url: llmBaseUrl.value,
+      api_key: llmApiKey.value,
+      strength: llmStrength.value,
+    },
+    thresholds: {
+      long_press_threshold_ms: parseInt(millisLongPress.value, 10),
+      double_press_window_ms: parseInt(millisDoublePress.value, 10),
+      command_countdown_ms: parseInt(millisCommandCountdown.value, 10),
+    },
+  };
+}
+
+function saveGeneralConfig() {
+  const payload = collectGeneralPayload();
+  const thresholdKeys = [
+    'long_press_threshold_ms',
+    'double_press_window_ms',
+    'command_countdown_ms',
+  ] as const;
+  for (const key of thresholdKeys) {
+    const n = payload.thresholds[key];
+    if (!Number.isFinite(n) || n < 50 || n > 10000) {
+      toast('danger', `${key} 需为 50~10000 的整数`);
+      return;
+    }
+  }
+  btnGeneralSave.textContent = '保存中…';
+  btnMillisSave.textContent = '保存中…';
+  btnGeneralSave.disabled = true;
+  btnMillisSave.disabled = true;
+  emit('drop-typing://save-general-config', payload);
+}
+
+btnGeneralSave.addEventListener('click', saveGeneralConfig);
+btnMillisSave.addEventListener('click', saveGeneralConfig);
+
+function setTestButton(btn: any, busy: boolean, label = '测试连接') {
+  btn.disabled = busy;
+  btn.textContent = busy ? '测试中…' : label;
+}
+
+btnTestAsr.addEventListener('click', () => {
+  setTestButton(btnTestAsr, true);
+  emit('drop-typing://test-asr', { asr: collectGeneralPayload().asr });
+});
+
+btnTestLlm.addEventListener('click', () => {
+  setTestButton(btnTestLlm, true);
+  emit('drop-typing://test-llm', { llm: collectGeneralPayload().llm });
+});
+
+// 配置文件兜底编辑器
+btnConfigReload.addEventListener('click', () => requestConfigFile());
+btnConfigSave.addEventListener('click', () => {
+  btnConfigSave.textContent = '保存中…';
+  btnConfigSave.disabled = true;
+  emit('drop-typing://save-config-file', { text: configFileText.value });
+});
+
+// 重启提示：所有需要重启的保存共用
+function promptRestart(message?: string) {
+  showConfirm(message || '部分配置需要重启应用后才能生效，是否立即重启？').then(ok => {
+    if (ok) emit('drop-typing://restart');
+  });
+}
+
+listen<any>('drop-typing://general-config', (e) => {
+  generalConfig = e.payload;
+  generalLoaded = true;
+  fillGeneralForm();
+});
+
+listen<any>('drop-typing://config-file', (e) => {
+  configFileText.value = e.payload.text || '';
+  configFileLoaded = true;
+});
+
+listen<any>('drop-typing://config-file-saved', (e) => {
+  btnConfigSave.textContent = '保存';
+  btnConfigSave.disabled = false;
+  if (e.payload.success) {
+    toast('success', '配置文件已保存');
+    // 文件可能改了任何段：刷新表单，避免双向编辑显示陈旧值
+    requestGeneralConfig();
+    requestCommandConfig();
+    if (e.payload.restart_required) {
+      promptRestart('配置中热键或唤醒词设置已变化，需要重启应用后才能生效，是否立即重启？');
+    }
+  } else {
+    toast('danger', e.payload.error || '保存失败');
+  }
+});
+
+listen<any>('drop-typing://restart-required', (e) => {
+  promptRestart(e.payload.message || '部分配置需要重启应用后才能生效，是否立即重启？');
+});
+
+listen<any>('drop-typing://test-asr-result', (e) => {
+  setTestButton(btnTestAsr, false);
+  if (e.payload.success) toast('success', e.payload.message);
+  else toast('danger', e.payload.message);
+});
+
+listen<any>('drop-typing://test-llm-result', (e) => {
+  setTestButton(btnTestLlm, false);
+  if (e.payload.success) toast('success', e.payload.message);
+  else toast('danger', e.payload.message);
+});
+
+// 通用配置保存完成后恢复按钮状态（提示文案由既有 config-saved 监听负责）
+listen<{ success: boolean; error?: string }>('drop-typing://config-saved', () => {
+  btnGeneralSave.textContent = '保存';
+  btnMillisSave.textContent = '保存';
+  btnGeneralSave.disabled = false;
+  btnMillisSave.disabled = false;
 });
 
 // ── 初始化 ────────────────────────────────────────────────────────────

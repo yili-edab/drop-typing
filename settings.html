@@ -11,11 +11,11 @@
     <div id="shell">
       <nav id="menu">
         <ul>
-          <li data-panel="base" class="active">基础润色</li>
-          <li data-panel="advanced">高级润色</li>
-          <li data-panel="wakeword">语音唤醒</li>
+          <li data-panel="ai-prompt" class="active">AI 提示词</li>
           <li data-panel="shortcut">快捷键</li>
-          <li data-panel="hardware">定制硬件</li>
+          <li data-panel="voice-command">语音控制</li>
+          <li data-panel="wakeword">语音唤醒</li>
+          <li data-panel="advanced">高级</li>
         </ul>
         <div id="nav-footer">
           <sl-button id="btn-restart" variant="warning" size="small">重启应用</sl-button>
@@ -52,11 +52,26 @@
           <sl-button slot="footer" variant="primary" id="dlg-add-style-ok">确定</sl-button>
         </sl-dialog>
 
-        <!-- 基础润色面板 -->
-        <section id="panel-base" class="panel active">
+        <!-- Token 预览弹窗 -->
+        <sl-dialog id="dlg-tokens" label="唤醒词 Token 预览">
+          <pre id="dlg-tokens-content" style="font-size:12px; max-height:400px; overflow-y:auto; white-space:pre-wrap; background:var(--sl-color-neutral-100); padding:12px; border-radius:6px;"></pre>
+          <sl-button slot="footer" variant="primary" id="dlg-tokens-close">关闭</sl-button>
+        </sl-dialog>
+
+        <!-- ── AI 提示词（基础润色 + 高级润色） ── -->
+        <section id="panel-ai-prompt" class="panel active">
+          <div class="style-current-row">
+            <label for="style-select-settings">当前润色样式</label>
+            <sl-select id="style-select-settings" size="small" clearable>
+              <sl-option value="">无</sl-option>
+            </sl-select>
+            <p class="help">选择后该样式会附加到基础润色提示词之后；与暂存条上的选择联动。</p>
+          </div>
+
+          <h2 class="panel-section-title">基础润色</h2>
           <label for="prompt-base">基础润色提示词</label>
           <p class="help">系统内置的通用清洗规则。修改后点击「保存」生效。</p>
-          <div class="editor-wrap">
+          <div class="editor-wrap" id="base-editor-wrap">
             <sl-spinner class="spinner"></sl-spinner>
             <textarea id="prompt-base" rows="12" placeholder="加载中…"></textarea>
           </div>
@@ -65,10 +80,8 @@
             <sl-button id="btn-base-save" variant="primary">保存</sl-button>
             <sl-button id="btn-base-ai" variant="neutral">AI 优化</sl-button>
           </div>
-        </section>
 
-        <!-- 高级润色提示词面板 -->
-        <section id="panel-advanced" class="panel">
+          <h2 class="panel-section-title">高级润色</h2>
           <label>润色风格</label>
           <p class="help">选择润色风格后，对应的提示词会附加在基础润色提示词之后发送给大模型。</p>
           <div id="style-tabs-wrap">
@@ -79,7 +92,7 @@
               <sl-icon name="plus-lg" slot="prefix"></sl-icon> 添加风格
             </sl-button>
           </div>
-          <div class="editor-wrap">
+          <div class="editor-wrap" id="style-editor-wrap">
             <sl-spinner class="spinner"></sl-spinner>
             <textarea id="style-textarea" rows="8" placeholder="加载中…"></textarea>
           </div>
@@ -90,34 +103,8 @@
           </div>
         </section>
 
-        <!-- 语音唤醒面板 -->
-        <section id="panel-wakeword" class="panel">
-          <label for="wakeword-list">语音唤醒词</label>
-          <p class="help">
-            自定义语音唤醒词及对应功能。保存后需<strong>重启应用</strong>生效。
-          </p>
-
-          <!-- 关键词列表 -->
-          <div id="wakeword-list">
-            <!-- JS 动态填充 -->
-          </div>
-
-          <!-- 添加按钮 -->
-          <sl-button id="btn-add-wakeword" size="small" variant="neutral">
-            <sl-icon name="plus-lg" slot="prefix"></sl-icon> 添加唤醒词
-          </sl-button>
-
-          <div class="actions">
-            <sl-button id="btn-wakeword-tokens" variant="default">查看 Token</sl-button>
-            <sl-button id="btn-wakeword-reset" variant="default">重置</sl-button>
-            <sl-button id="btn-wakeword-save" variant="primary">保存</sl-button>
-          </div>
-        </section>
-
-        <!-- 快捷键面板 -->
+        <!-- ── 快捷键 ── -->
         <section id="panel-shortcut" class="panel">
-
-          <!-- == 键盘 == -->
           <div class="shortcut-subsection">
             <label class="subsection-label">键盘</label>
             <p class="help">
@@ -129,7 +116,6 @@
             </div>
           </div>
 
-          <!-- == 鼠标 == -->
           <div class="shortcut-subsection">
             <label class="subsection-label">鼠标</label>
             <p class="help">配置鼠标侧键与功能通道的绑定。</p>
@@ -144,19 +130,172 @@
           </div>
         </section>
 
-        <!-- Token 预览弹窗 -->
-        <sl-dialog id="dlg-tokens" label="唤醒词 Token 预览">
-          <pre id="dlg-tokens-content" style="font-size:12px; max-height:400px; overflow-y:auto; white-space:pre-wrap; background:var(--sl-color-neutral-100); padding:12px; border-radius:6px;"></pre>
-          <sl-button slot="footer" variant="primary" id="dlg-tokens-close">关闭</sl-button>
-        </sl-dialog>
+        <!-- ── 语音控制（Command） ── -->
+        <section id="panel-voice-command" class="panel">
+          <label>指令确认倒计时</label>
+          <div class="field-row">
+            <sl-input id="cmd-countdown" type="number" min="50" max="10000" size="small"
+                      placeholder="留空使用全局值"></sl-input>
+            <p class="help">当前生效：<span id="cmd-countdown-effective">2000</span> ms。</p>
+          </div>
 
-        <!-- 定制硬件面板 -->
-        <section id="panel-hardware" class="panel">
-          <label>定制硬件</label>
-          <p class="help">连接和管理定制硬件设备。</p>
-          <div class="placeholder-box">
-            <sl-icon name="gear" style="font-size:32px; color:var(--sl-color-neutral-300);"></sl-icon>
-            <p style="color:var(--sl-color-neutral-400); margin-top:8px;">定制硬件支持即将推出</p>
+          <label>指令词表</label>
+          <p class="help">未配置任何条目时使用内置词表；用户条目优先匹配，内置兜底。</p>
+          <div id="command-lexicon">
+            <div class="lex-block" data-kind="action">
+              <h3>动作别名</h3>
+              <p class="help">说「截图」→ 按 Shift+Cmd+4</p>
+              <div class="lex-rows"></div>
+              <sl-button size="small" variant="neutral" class="lex-add" data-kind="action">添加动作别名</sl-button>
+            </div>
+            <div class="lex-block" data-kind="modifier">
+              <h3>修饰键别名</h3>
+              <p class="help">说「win」→ 识别为 Cmd</p>
+              <div class="lex-rows"></div>
+              <sl-button size="small" variant="neutral" class="lex-add" data-kind="modifier">添加修饰键别名</sl-button>
+            </div>
+            <div class="lex-block" data-kind="key">
+              <h3>按键别名</h3>
+              <p class="help">说「去除」→ 识别为 DELETE</p>
+              <div class="lex-rows"></div>
+              <sl-button size="small" variant="neutral" class="lex-add" data-kind="key">添加按键别名</sl-button>
+            </div>
+            <div class="lex-block" data-kind="stop">
+              <h3>停用词</h3>
+              <p class="help">「给我按复制」中的「给我」会被丢弃</p>
+              <div class="lex-rows"></div>
+              <sl-button size="small" variant="neutral" class="lex-add" data-kind="stop">添加停用词</sl-button>
+            </div>
+            <div class="lex-block" data-kind="homophone">
+              <h3>字母谐音</h3>
+              <p class="help">ASR 把字母 A 识别成「挨」时建立映射</p>
+              <div class="lex-rows"></div>
+              <sl-button size="small" variant="neutral" class="lex-add" data-kind="homophone">添加谐音映射</sl-button>
+            </div>
+          </div>
+
+          <div class="actions">
+            <sl-button id="btn-command-reset" variant="default">重置</sl-button>
+            <sl-button id="btn-command-save" variant="primary">保存</sl-button>
+          </div>
+        </section>
+
+        <!-- ── 语音唤醒 ── -->
+        <section id="panel-wakeword" class="panel">
+          <label for="wakeword-list">语音唤醒词</label>
+          <p class="help">
+            自定义语音唤醒词及对应功能。保存后需<strong>重启应用</strong>生效。
+          </p>
+
+          <div id="wakeword-list">
+            <!-- JS 动态填充 -->
+          </div>
+
+          <sl-button id="btn-add-wakeword" size="small" variant="neutral">
+            <sl-icon name="plus-lg" slot="prefix"></sl-icon> 添加唤醒词
+          </sl-button>
+
+          <sl-details id="wakeword-advanced" class="advanced-details">
+            <span slot="summary">高级参数</span>
+            <div class="form-grid">
+              <sl-input id="ww-model-dir" label="模型目录（model_dir）"
+                        placeholder="sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"></sl-input>
+              <sl-input id="ww-threshold" type="number" step="0.05" min="0" max="1"
+                        label="检测阈值（keywords_threshold）"></sl-input>
+              <sl-input id="ww-score" type="number" step="0.1"
+                        label="唤醒词 score boost（keywords_score）"></sl-input>
+              <sl-input id="ww-silence" type="number"
+                        label="静音判定时长（silence_timeout_ms）"></sl-input>
+              <sl-input id="ww-pre-roll" type="number"
+                        label="唤醒词前保留（pre_roll_ms）"></sl-input>
+              <sl-input id="ww-ring" type="number"
+                        label="环形缓冲时长（ring_buffer_duration_ms）"></sl-input>
+            </div>
+          </sl-details>
+
+          <div class="actions">
+            <sl-button id="btn-wakeword-tokens" variant="default">查看 Token</sl-button>
+            <sl-button id="btn-wakeword-reset" variant="default">重置</sl-button>
+            <sl-button id="btn-wakeword-save" variant="primary">保存</sl-button>
+          </div>
+        </section>
+
+        <!-- ── 高级 ── -->
+        <section id="panel-advanced" class="panel">
+          <div id="advanced-tabs" class="sub-tabs">
+            <button data-sub="models" class="active">模型</button>
+            <button data-sub="millis">毫秒定义</button>
+            <button data-sub="config-file">配置文件</button>
+          </div>
+
+          <!-- 模型 -->
+          <div id="sub-models" class="sub-panel active">
+            <h2 class="panel-section-title">ASR（语音识别）</h2>
+            <div class="form-grid">
+              <sl-input id="asr-provider" label="厂商（provider）" placeholder="bailian"></sl-input>
+              <sl-select id="asr-protocol" label="协议（protocol）">
+                <sl-option value="dashscope-realtime">dashscope-realtime（实时，默认）</sl-option>
+                <sl-option value="dashscope-http">dashscope-http（批量）</sl-option>
+              </sl-select>
+              <sl-input id="asr-model" label="模型（model）" placeholder="fun-asr-realtime"></sl-input>
+              <sl-input id="asr-base-url" label="Base URL" placeholder="留空使用默认端点"></sl-input>
+              <sl-input id="asr-api-key" type="password" password-toggle label="API Key"
+                        placeholder="sk-..."></sl-input>
+            </div>
+            <div class="actions">
+              <sl-button id="btn-test-asr" variant="neutral">测试连接</sl-button>
+            </div>
+
+            <h2 class="panel-section-title">LLM（文本清洗）</h2>
+            <p class="help">不配置 LLM 或 API Key 为空时，清洗层关闭，ASR 结果直出。</p>
+            <div class="form-grid">
+              <sl-input id="llm-provider" label="厂商（provider）" placeholder="bailian / deepseek"></sl-input>
+              <sl-select id="llm-protocol" label="协议（protocol）">
+                <sl-option value="openai-chat">openai-chat（默认）</sl-option>
+                <sl-option value="anthropic-messages">anthropic-messages</sl-option>
+              </sl-select>
+              <sl-input id="llm-model" label="模型（model）" placeholder="按工作区可用模型填写"></sl-input>
+              <sl-input id="llm-base-url" label="Base URL" placeholder="留空使用默认端点"></sl-input>
+              <sl-input id="llm-api-key" type="password" password-toggle label="API Key"
+                        placeholder="sk-..."></sl-input>
+              <sl-select id="llm-strength" label="优化强度（strength）">
+                <sl-option value="conservative">conservative（保守：只加标点）</sl-option>
+                <sl-option value="standard">standard（标准，默认）</sl-option>
+              </sl-select>
+            </div>
+            <div class="actions">
+              <sl-button id="btn-test-llm" variant="neutral">测试连接</sl-button>
+              <sl-button id="btn-general-save" variant="primary">保存</sl-button>
+            </div>
+          </div>
+
+          <!-- 毫秒定义 -->
+          <div id="sub-millis" class="sub-panel">
+            <div class="form-grid">
+              <sl-input id="millis-long-press" type="number" min="50" max="10000"
+                        label="长按判定阈值（ms）"></sl-input>
+              <p class="help">按住右 ⌘ 达到该时长视为长按录音，否则短按提交。默认 150ms。</p>
+              <sl-input id="millis-double-press" type="number" min="50" max="10000"
+                        label="双击窗口（ms）"></sl-input>
+              <p class="help">两次短按松手间隔；窗口内第二击视为双击清空。默认 350ms。</p>
+              <sl-input id="millis-command-countdown" type="number" min="50" max="10000"
+                        label="指令倒计时（ms）"></sl-input>
+              <p class="help">语音指令确认倒计时，默认 2000ms；「语音控制」面板的倒计时会覆盖此值。</p>
+            </div>
+            <div class="actions">
+              <sl-button id="btn-millis-save" variant="primary">保存</sl-button>
+            </div>
+          </div>
+
+          <!-- 配置文件兜底编辑器 -->
+          <div id="sub-config-file" class="sub-panel">
+            <p class="help">以下为 <code>~/.drop-typing.toml</code> 原文，可直接编辑并保存；保存会先做 TOML
+              校验，失败不写盘。热键或唤醒词改动需要重启应用生效。</p>
+            <textarea id="config-file-text" rows="18" spellcheck="false" placeholder="加载中…"></textarea>
+            <div class="actions">
+              <sl-button id="btn-config-reload" variant="default">重新加载</sl-button>
+              <sl-button id="btn-config-save" variant="primary">保存</sl-button>
+            </div>
           </div>
         </section>
       </main>

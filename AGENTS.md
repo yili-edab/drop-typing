@@ -39,7 +39,7 @@ cargo run --example test_llm -- "要清洗的文本"      # LLM 清洗独立手�
 - `[asr].provider` 是厂商名（分组/文档用），`[asr].protocol` 决定代码用哪个协议适配器（`dashscope-realtime` 默认 / `dashscope-http` 备选）；`protocol` 缺省时按旧版 `provider` 写法向后兼容推断
 - `[llm]`（M2 清洗层）同样约定：`protocol` 决定适配器（`openai-chat` 默认 / `anthropic-messages`），`strength` 为优化强度档位（`conservative` / `standard` 默认）；**不配置 `[llm]` 或缺 api_key 即关闭清洗、ASR 直出**
 - API Key 可用环境变量 `DASHSCOPE_API_KEY` 提供（优先级低于配置文件，仅对 ASR 生效）
-- `long_press_threshold_ms`：长按/短按判定阈值，默认 250ms
+- `long_press_threshold_ms`：长按/短按判定阈值，默认 150ms
 - `command_countdown_ms`：语音指令确认倒计时（M4），默认 2000ms；指令解析完成后在暂存条大字展示并倒计时，到 0 自动模拟按键
 
 macOS 权限：辅助功能（热键监听 + 模拟粘贴）与麦克风（录音）都必须授予。**dev 模式下授权的是运行 `npm run tauri dev` 的终端**，打包后的 .app 授权 App 本身；dev 模式裸二进制没有 Info.plist，部分系统版本无法弹窗申请麦克风，遇录音为空时用打包的 .app 验证。
