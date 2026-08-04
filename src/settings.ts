@@ -754,9 +754,7 @@ function renderKeyboard() {
           : keyboardMods.includes(modValue);
         const btn = document.createElement('button');
         btn.className = 'kb-mod kb-key' + (active ? ' active' : '');
-        btn.textContent = keyboardMode === 'action'
-          ? (MOD_DISPLAY[modValue] || modValue)
-          : keySpecDisplay(modValue, shortcutState.platform);
+        btn.textContent = MOD_DISPLAY[modValue] || modValue;
         btn.addEventListener('click', () => {
           if (keyboardMode === 'single') {
             keyboardSingleKey = modValue;
@@ -800,11 +798,11 @@ function renderKeyboard() {
     kbPreviewText.textContent = formatComboText(keyboardMods, keyboardKey || '?');
   } else if (keyboardMode === 'single') {
     kbPreviewText.textContent = keyboardSingleKey
-      ? keySpecDisplay(keyboardSingleKey, shortcutState.platform)
+      ? formatShortcut([keyboardSingleKey], shortcutState.platform)
       : '未选择';
   } else {
     kbPreviewText.textContent = keyboardMods.length
-      ? keyboardMods.map(m => keySpecDisplay(m, shortcutState.platform)).join(' + ')
+      ? formatShortcut(keyboardMods, shortcutState.platform)
       : '未选择';
   }
 }
@@ -1380,57 +1378,27 @@ const MOUSE_CHANNELS = [
   { key: 'repair',  label: '修正 (Repair)',  desc: '后退键 (Back / X1)' },
 ] as const;
 
-// 家族名平台显示名称
-const FAMILY_DISPLAY: Record<string, Record<string, string>> = {
-  macos:   { Control: 'Ctrl', Meta: 'Cmd', Alt: 'Opt', Shift: 'Shift' },
-  windows: { Control: 'Ctrl', Meta: 'Win', Alt: 'Alt',  Shift: 'Shift' },
+// rdev 键名 → 统一短显示（与动作别名一致）
+const KEY_DISPLAY_UNIFIED: Record<string, string> = {
+  Return: 'ENTER', Space: 'SPACE', Tab: 'TAB', Escape: 'ESC',
+  Backspace: 'DELETE', Delete: 'DELETE',
+  UpArrow: 'UP', DownArrow: 'DOWN', LeftArrow: 'LEFT', RightArrow: 'RIGHT',
+  Home: 'HOME', End: 'END', PageUp: 'PGUP', PageDown: 'PGDN',
+  Insert: 'INSERT', CapsLock: 'CAPSLOCK', NumLock: 'NUMLOCK',
+  ScrollLock: 'SCROLLLOCK', Pause: 'PAUSE', PrintScreen: 'PRTSC',
 };
 
-// rdev 精确键 → 显示名称
-const KEY_DISPLAY_BY_PLATFORM: Record<string, Record<string, string>> = {
-  macos: {
-    MetaRight: '右 Cmd', MetaLeft: '左 Cmd',
-    AltGr: '右 Opt', Alt: '左 Opt',
-    ShiftRight: '右 Shift', ShiftLeft: '左 Shift',
-    ControlRight: '右 Ctrl', ControlLeft: '左 Ctrl',
-  },
-  windows: {
-    MetaRight: '右 Win', MetaLeft: '左 Win',
-    AltGr: 'AltGr', Alt: 'Alt',
-    ShiftRight: '右 Shift', ShiftLeft: '左 Shift',
-    ControlRight: '右 Ctrl', ControlLeft: '左 Ctrl',
-  },
-};
-const KEY_DISPLAY_COMMON: Record<string, string> = {
-  Escape: 'Esc', Space: '空格', Tab: 'Tab', Return: 'Enter',
-  Backspace: 'Backspace', Delete: 'Delete',
-  CapsLock: 'CapsLock',
-  UpArrow: '↑', DownArrow: '↓', LeftArrow: '←', RightArrow: '→',
-  Home: 'Home', End: 'End', PageUp: 'PgUp', PageDown: 'PgDn',
-  Insert: 'Insert', NumLock: 'NumLock',
-  Pause: 'Pause', PrintScreen: 'PrtSc',
-};
-
-function keySpecDisplay(name: string, platform: string): string {
-  // 家族名
-  if (['Control', 'Meta', 'Alt', 'Shift'].includes(name)) {
-    return FAMILY_DISPLAY[platform]?.[name] ?? name;
-  }
-  // 平台特定精确键
-  const pd = KEY_DISPLAY_BY_PLATFORM[platform];
-  if (pd?.[name]) return pd[name];
-  // 通用精确键
-  if (KEY_DISPLAY_COMMON[name]) return KEY_DISPLAY_COMMON[name];
-  // KeyA → A, Num1 → 1, F1 → F1
-  if (name.startsWith('Key') && name.length === 4) return name[3];
-  if (name.startsWith('Num') && name.length === 4) return name[3];
-  if (name.startsWith('Kp') && name.length === 3) return 'Num' + name[2];
-  return name;
-}
-
-function formatShortcut(keys: string[], platform: string): string {
+/** 统一短显示：修饰键 L-CMD/R-CTRL，键名 ENTER/SPACE/A/4 等 */
+function formatShortcut(keys: string[], _platform: string): string {
   if (!keys || keys.length === 0) return '未设置';
-  return keys.map(k => keySpecDisplay(k, platform)).join(' + ');
+  return keys.map(k => {
+    if (MOD_DISPLAY[k]) return MOD_DISPLAY[k];
+    if (KEY_DISPLAY_UNIFIED[k]) return KEY_DISPLAY_UNIFIED[k];
+    if (/^Key[A-Z]$/.test(k)) return k.slice(3);
+    if (/^Num[0-9]$/.test(k)) return k.slice(3);
+    if (/^F([1-9]|1[0-2])$/.test(k)) return k;
+    return k;
+  }).join(' + ');
 }
 
 // ---- 状态 ----
@@ -1486,6 +1454,16 @@ function renderKeyboardChannels() {
     descSpan.textContent = ch.desc;
     info.append(labelSpan, descSpan);
 
+    // 区分左右开关（与动作别名一致，放在显示左侧；鼠标通道无此概念）
+    const sideSwitch = document.createElement('sl-switch');
+    sideSwitch.size = 'small';
+    sideSwitch.checked = !!shortcutState.sides[ch.key];
+    sideSwitch.textContent = '区分左右';
+    sideSwitch.addEventListener('sl-change', () => {
+      shortcutState.sides[ch.key] = sideSwitch.checked;
+      renderKeyboardChannels();
+    });
+
     // 当前值显示
     const display = document.createElement('span');
     display.className = 'shortcut-display';
@@ -1527,21 +1505,11 @@ function renderKeyboardChannels() {
     kbBtn.textContent = '键盘选择';
     kbBtn.addEventListener('click', () => openShortcutKeyboard(ch.key));
 
-    // 区分左右开关（仅键盘通道显示；鼠标通道无修饰键概念）
-    const sideSwitch = document.createElement('sl-switch');
-    sideSwitch.size = 'small';
-    sideSwitch.checked = !!shortcutState.sides[ch.key];
-    sideSwitch.textContent = '区分左右';
-    sideSwitch.addEventListener('sl-change', () => {
-      shortcutState.sides[ch.key] = sideSwitch.checked;
-      renderKeyboardChannels();
-    });
-
     const btnGroup = document.createElement('div');
     btnGroup.className = 'shortcut-btn-group';
-    btnGroup.append(recBtn, clearBtn, kbBtn, sideSwitch);
+    btnGroup.append(recBtn, kbBtn, clearBtn);
 
-    row.append(info, display, btnGroup);
+    row.append(info, sideSwitch, display, btnGroup);
     keyboardChannelsEl.appendChild(row);
   }
 }
@@ -1665,8 +1633,8 @@ listen<any>('drop-typing://shortcut-config', (e) => {
   };
   // 平台提示
   platformHintEl.textContent = d.platform === 'macos'
-    ? 'macOS：单键快捷键（如右 Cmd、右 Opt 等）'
-    : 'Windows：组合快捷键（如 Win + Alt 等）';
+    ? 'macOS：单键快捷键（如 R-CMD、R-OPT 等）'
+    : 'Windows：组合快捷键（如 CMD + ALT 等）';
   renderAllShortcut();
 });
 
