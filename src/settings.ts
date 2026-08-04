@@ -604,6 +604,7 @@ const kbKeysEl = document.getElementById('kb-keys')!;
 const kbPreviewText = document.getElementById('kb-preview-text')!;
 const kbOk = document.getElementById('kb-ok') as any;
 const kbCancel = document.getElementById('kb-cancel') as any;
+const kbClear = document.getElementById('kb-clear') as any;
 
 const KB_MOD_KEYS = ['Ctrl', 'Opt', 'Cmd', 'Shift'];
 const KB_LAYOUT = [
@@ -703,6 +704,12 @@ kbOk.addEventListener('click', () => {
 });
 
 kbCancel.addEventListener('click', () => dlgKeyboard.hide());
+
+kbClear.addEventListener('click', () => {
+  keyboardMods = [];
+  keyboardKey = null;
+  renderKeyboard();
+});
 
 let commandConfig: CommandConfigState = {
   countdown_ms: null,
