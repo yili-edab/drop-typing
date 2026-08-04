@@ -50,6 +50,12 @@ impl Lexicon {
 
         Lexicon { main, homophones }
     }
+
+    /// 词表条目总数（内置 + 用户条目，测试用）。
+    #[cfg(test)]
+    pub(crate) fn entry_count(&self) -> usize {
+        self.main.len() + self.homophones.len()
+    }
 }
 
 // ---------- 用户条目追加 ----------

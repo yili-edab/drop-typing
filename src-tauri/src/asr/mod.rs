@@ -82,3 +82,38 @@ pub fn backend_from_config(cfg: &Config) -> Option<AsrBackend> {
 
 /// finish() 等待最终结果的超时
 pub(crate) const FINISH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 生成一段 16kHz 单声道 16bit 的静音 WAV，用于「测试连接」验证 ASR 配置。
+pub(crate) fn make_silence_wav(seconds: u64) -> Vec<u8> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).expect("创建 WAV writer");
+        for _ in 0..seconds * 16_000 {
+            writer.write_sample(0i16).expect("写入静音样本");
+        }
+        writer.finalize().expect("完成 WAV 写入");
+    }
+    cursor.into_inner()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silence_wav_is_16k_mono_16bit() {
+        let wav = make_silence_wav(1);
+        let reader = hound::WavReader::new(std::io::Cursor::new(&wav)).unwrap();
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_rate, 16000);
+        assert_eq!(spec.bits_per_sample, 16);
+        assert_eq!(reader.duration(), 16000);
+    }
+}

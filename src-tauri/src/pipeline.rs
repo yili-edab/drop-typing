@@ -30,7 +30,6 @@ use crate::hotkey::{self, HotkeyEvent};
 use crate::inject::{self, Injector};
 use crate::llm::{self, TextCleaner};
 use crate::prompts;
-use crate::settings;
 use crate::staging::Staging;
 use crate::wakeword::{self, WakeEvent, WakeWord};
 
@@ -82,19 +81,43 @@ enum State {
     PendingCommit { since: Instant },
 }
 
+/// 运行时可热加载状态：模型后端、清洗器、指令词表与毫秒参数。
+///
+/// 设置页保存后通过 `drop-typing://runtime-reload` 事件重建；
+/// 热键绑定与唤醒词引擎不在此列（启动时加载，改动需重启）。
+struct RuntimeState {
+    backend: Option<Arc<AsrBackend>>,
+    cleaner: Option<Arc<dyn TextCleaner>>,
+    lexicon: Arc<command::Lexicon>,
+    threshold: Duration,
+    double_press: Duration,
+    command_countdown: Duration,
+}
+
+impl RuntimeState {
+    fn from_config(cfg: &Config) -> Self {
+        Self {
+            backend: asr::backend_from_config(cfg).map(Arc::new),
+            cleaner: llm::cleaner_from_config(cfg),
+            lexicon: Arc::new(command::Lexicon::build(Some(&cfg.command))),
+            threshold: Duration::from_millis(cfg.long_press_threshold_ms),
+            double_press: Duration::from_millis(cfg.double_press_window_ms),
+            command_countdown: Duration::from_millis(cfg.effective_command_countdown_ms()),
+        }
+    }
+}
+
 pub fn start(app: AppHandle) {
     let staging = Staging::new(app.clone());
     let (cfg, warning) = Config::load_lenient();
-    let backend = asr::backend_from_config(&cfg);
-    let cleaner = llm::cleaner_from_config(&cfg);
     let injector = inject::default_injector(app.clone());
     let source = hotkey::default_source();
-    let lexicon = Arc::new(command::Lexicon::build(Some(&cfg.command)));
+    let runtime = Arc::new(Mutex::new(RuntimeState::from_config(&cfg)));
 
     // 启动诊断：配置 / 权限问题直接以黄底红字显示在暂存条
     if let Some(w) = warning {
         staging.error(&w);
-    } else if backend.is_none() {
+    } else if runtime.lock().unwrap().backend.is_none() {
         staging.error("未配置 ASR API Key 或 provider 未知。请检查配置文件（见 config.example.toml）。");
     }
     if !source.permission_trusted() {
@@ -128,6 +151,21 @@ pub fn start(app: AppHandle) {
         let _ = cfg.save();
         // 重新发送样式信息以更新暂存条下拉框选中项
         crate::settings::emit_styles(&app_for_style);
+    });
+
+    // 设置页保存可热加载配置（模型 / 毫秒 / 指令词表）后，重建运行时状态。
+    // 热键绑定与唤醒词引擎保持启动时加载，改动需重启生效（由设置页提示）。
+    let runtime_for_reload = runtime.clone();
+    let staging_for_reload = staging.clone();
+    app.listen("drop-typing://runtime-reload", move |_| {
+        let (new_cfg, _) = Config::load_lenient();
+        let mut g = runtime_for_reload.lock().unwrap();
+        *g = RuntimeState::from_config(&new_cfg);
+        if g.backend.is_none() {
+            staging_for_reload.error(
+                "未配置 ASR API Key 或 provider 未知。请检查配置文件（见 config.example.toml）。",
+            );
+        }
     });
 
     let (tx, rx) = mpsc::channel::<HotkeyEvent>();
@@ -177,7 +215,7 @@ pub fn start(app: AppHandle) {
 
     std::thread::spawn(move || {
         run_loop(
-            cfg, backend, cleaner, injector, staging, rx, lexicon, current_style,
+            cfg, runtime, injector, staging, rx, current_style,
             wake_buffer, wake_rx,
         );
     });
@@ -185,12 +223,10 @@ pub fn start(app: AppHandle) {
 
 fn run_loop(
     cfg: Config,
-    backend: Option<AsrBackend>,
-    cleaner: Option<Arc<dyn TextCleaner>>,
+    runtime: Arc<Mutex<RuntimeState>>,
     injector: Box<dyn Injector>,
     staging: Staging,
     rx: mpsc::Receiver<HotkeyEvent>,
-    lexicon: Arc<command::Lexicon>,
     current_style: Arc<Mutex<Option<String>>>,
     wake_buffer: Option<Arc<RingBuffer>>,
     wake_rx: Option<mpsc::Receiver<WakeEvent>>,
@@ -202,7 +238,6 @@ fn run_loop(
             None
         }
     };
-    let backend = backend.map(Arc::new);
 
     let mut state = if wake_buffer.is_some() && wake_rx.is_some() {
         State::Listening
@@ -212,10 +247,7 @@ fn run_loop(
     // 唤醒词资源（独立于 State enum，方便跨状态保留）
     let wake_buffer: Option<Arc<RingBuffer>> = wake_buffer;
     let wake_rx: Option<mpsc::Receiver<WakeEvent>> = wake_rx;
-    let threshold = Duration::from_millis(cfg.long_press_threshold_ms);
     let poll_interval = Duration::from_millis(50); // 轮询阈值到期
-    let double_press = Duration::from_millis(cfg.double_press_window_ms); // 双击窗口（可配置）
-    let command_countdown = Duration::from_millis(cfg.effective_command_countdown_ms()); // 指令确认倒计时（M4）
     let injector: Arc<dyn Injector> = Arc::from(injector); // 指令倒计时线程需要共享 injector
     // 指令代次：每次新录音/新指令 bump，倒计时线程执行前比对，防串台
     let command_gen = Arc::new(AtomicU64::new(0));
@@ -230,6 +262,19 @@ fn run_loop(
     };
 
     loop {
+        // 每轮循环取一次运行时快照：设置页保存后可热加载的配置
+        // （模型 / 毫秒 / 指令词表）在此生效
+        let (backend, cleaner, lexicon, threshold, double_press, command_countdown) = {
+            let g = runtime.lock().unwrap();
+            (
+                g.backend.clone(),
+                g.cleaner.clone(),
+                g.lexicon.clone(),
+                g.threshold,
+                g.double_press,
+                g.command_countdown,
+            )
+        };
         match rx.recv_timeout(poll_interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // 按住期间：超阈值才显示暂存条（避免短按一闪而过），然后设"识别中"
@@ -1256,6 +1301,34 @@ fn commit(staging: &Staging, injector: &dyn Injector) {
             staging.set_text(&text);
             staging.error(&format!("提交失败（内容已保留在暂存条）：{e}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_state_defaults() {
+        let st = RuntimeState::from_config(&Config::default());
+        assert!(st.backend.is_none());
+        assert!(st.cleaner.is_none());
+        assert_eq!(st.threshold, Duration::from_millis(150));
+        assert_eq!(st.double_press, Duration::from_millis(350));
+        assert_eq!(st.command_countdown, Duration::from_millis(2000));
+        assert!(st.lexicon.entry_count() > 0);
+    }
+
+    #[test]
+    fn runtime_state_reflects_custom_thresholds() {
+        let mut cfg = Config::default();
+        cfg.long_press_threshold_ms = 500;
+        cfg.double_press_window_ms = 400;
+        cfg.command_countdown_ms = 3000;
+        let st = RuntimeState::from_config(&cfg);
+        assert_eq!(st.threshold, Duration::from_millis(500));
+        assert_eq!(st.double_press, Duration::from_millis(400));
+        assert_eq!(st.command_countdown, Duration::from_millis(3000));
     }
 }
 

@@ -4,10 +4,83 @@
 
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
-use crate::config::Config;
+use std::sync::mpsc;
+use std::time::Duration;
+
+use crate::asr::{self, AsrBackend};
+use crate::config::{self, CommandConfig, Config, MouseHotkeyConfig};
+use crate::llm;
 use crate::prompts::{self, PromptConfig};
 use crate::hotkey::{self, Bindings, KeySpec, MouseButton};
-use crate::config::MouseHotkeyConfig;
+
+// ── 通用配置载荷工具 ──────────────────────────────────────────
+
+fn opt_str(v: &serde_json::Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+fn apply_asr_payload(cfg: &mut Config, v: &serde_json::Value) {
+    cfg.asr.provider = opt_str(v, "provider").unwrap_or_else(|| "bailian".to_string());
+    cfg.asr.protocol = opt_str(v, "protocol");
+    cfg.asr.model = opt_str(v, "model");
+    cfg.asr.base_url = opt_str(v, "base_url");
+    cfg.asr.api_key = opt_str(v, "api_key");
+}
+
+fn apply_llm_payload(cfg: &mut Config, v: &serde_json::Value) {
+    cfg.llm.provider = opt_str(v, "provider");
+    cfg.llm.protocol = opt_str(v, "protocol");
+    cfg.llm.model = opt_str(v, "model");
+    cfg.llm.base_url = opt_str(v, "base_url");
+    cfg.llm.api_key = opt_str(v, "api_key");
+    cfg.llm.strength = opt_str(v, "strength");
+}
+
+fn config_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".drop-typing.toml")
+}
+
+/// ASR 连通性测试：批量后端用 1 秒静音 WAV 走一遍 transcribe，
+/// 实时后端建立会话并发送 100ms 静音 PCM 后 finish。
+async fn run_asr_test(backend: AsrBackend) -> Result<String, String> {
+    match backend {
+        AsrBackend::Batch(p) => {
+            let wav = asr::make_silence_wav(1);
+            match tokio::time::timeout(Duration::from_secs(10), p.transcribe(&wav, None)).await {
+                Ok(Ok(text)) => Ok(format!("连接成功，ASR 返回：{text}")),
+                Ok(Err(e)) => Err(format!("ASR 调用失败：{e:#}")),
+                Err(_) => Err("ASR 测试超时（10 秒）".to_string()),
+            }
+        }
+        AsrBackend::Realtime(p) => {
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                let (ptx, _prx) = mpsc::channel::<String>();
+                let session = p
+                    .start_session(ptx)
+                    .map_err(|e| format!("会话建立失败：{e:#}"))?;
+                // 100ms @16kHz/16bit/mono = 3200 字节
+                session
+                    .send_audio(&vec![0u8; 3200])
+                    .map_err(|e| format!("发送音频失败：{e:#}"))?;
+                session
+                    .finish()
+                    .map_err(|e| format!("识别调用失败：{e:#}"))
+            })
+            .await;
+            match result {
+                Ok(Ok(text)) => Ok(format!("连接成功，ASR 返回：{text}")),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(format!("测试线程异常：{e}")),
+            }
+        }
+    }
+}
 
 // ── 事件处理注册 ──────────────────────────────────────────
 
@@ -320,6 +393,14 @@ pub fn register_settings_handlers(app: &AppHandle) {
                 "defaults": defaults,
                 "enabled": cfg.wakeword.enabled,
                 "has_custom": !cfg.wakeword.keywords.is_empty(),
+                "advanced": {
+                    "model_dir": &cfg.wakeword.model_dir,
+                    "keywords_threshold": cfg.wakeword.keywords_threshold,
+                    "keywords_score": cfg.wakeword.keywords_score,
+                    "silence_timeout_ms": cfg.wakeword.silence_timeout_ms,
+                    "pre_roll_ms": cfg.wakeword.pre_roll_ms,
+                    "ring_buffer_duration_ms": cfg.wakeword.ring_buffer_duration_ms,
+                },
             }),
         );
     });
@@ -350,6 +431,30 @@ pub fn register_settings_handlers(app: &AppHandle) {
             .get("enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(cfg.wakeword.enabled);
+
+        if let Some(adv) = payload.get("advanced") {
+            if let Some(v) = adv.get("model_dir").and_then(|v| v.as_str()) {
+                let v = v.trim();
+                if !v.is_empty() {
+                    cfg.wakeword.model_dir = v.to_string();
+                }
+            }
+            if let Some(v) = adv.get("keywords_threshold").and_then(|v| v.as_f64()) {
+                cfg.wakeword.keywords_threshold = v as f32;
+            }
+            if let Some(v) = adv.get("keywords_score").and_then(|v| v.as_f64()) {
+                cfg.wakeword.keywords_score = v as f32;
+            }
+            if let Some(v) = adv.get("silence_timeout_ms").and_then(|v| v.as_u64()) {
+                cfg.wakeword.silence_timeout_ms = v;
+            }
+            if let Some(v) = adv.get("pre_roll_ms").and_then(|v| v.as_u64()) {
+                cfg.wakeword.pre_roll_ms = v;
+            }
+            if let Some(v) = adv.get("ring_buffer_duration_ms").and_then(|v| v.as_u64()) {
+                cfg.wakeword.ring_buffer_duration_ms = v;
+            }
+        }
 
         match cfg.save() {
             Ok(()) => {
@@ -610,7 +715,313 @@ pub fn register_settings_handlers(app: &AppHandle) {
             }
         }
     });
+
+    // ── 通用配置（模型 / 毫秒）：获取
     let ah = app.clone();
+    app.listen("drop-typing://get-general-config", move |_| {
+        eprintln!("[drop-typing] get-general-config received");
+        let (cfg, _) = Config::load_lenient();
+        let _ = ah.emit(
+            "drop-typing://general-config",
+            serde_json::json!({
+                "asr": {
+                    "provider": &cfg.asr.provider,
+                    "protocol": &cfg.asr.protocol,
+                    "model": &cfg.asr.model,
+                    "base_url": &cfg.asr.base_url,
+                    "api_key": &cfg.asr.api_key,
+                },
+                "llm": {
+                    "provider": &cfg.llm.provider,
+                    "protocol": &cfg.llm.protocol,
+                    "model": &cfg.llm.model,
+                    "base_url": &cfg.llm.base_url,
+                    "api_key": &cfg.llm.api_key,
+                    "strength": &cfg.llm.strength,
+                },
+                "thresholds": {
+                    "long_press_threshold_ms": cfg.long_press_threshold_ms,
+                    "double_press_window_ms": cfg.double_press_window_ms,
+                    "command_countdown_ms": cfg.command_countdown_ms,
+                },
+                "effective_command_countdown_ms": cfg.effective_command_countdown_ms(),
+            }),
+        );
+    });
+
+    // ── 通用配置（模型 / 毫秒）：保存
+    let ah = app.clone();
+    app.listen("drop-typing://save-general-config", move |ev| {
+        eprintln!("[drop-typing] save-general-config received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let mut cfg = Config::load_lenient().0;
+
+        if let Some(asr) = payload.get("asr") {
+            apply_asr_payload(&mut cfg, asr);
+        }
+        if let Some(llm) = payload.get("llm") {
+            apply_llm_payload(&mut cfg, llm);
+        }
+        if let Some(th) = payload.get("thresholds") {
+            for (key, slot) in [
+                ("long_press_threshold_ms", &mut cfg.long_press_threshold_ms),
+                ("double_press_window_ms", &mut cfg.double_press_window_ms),
+                ("command_countdown_ms", &mut cfg.command_countdown_ms),
+            ] {
+                match th.get(key).and_then(|v| v.as_u64()) {
+                    Some(n) if (50..=10_000).contains(&n) => *slot = n,
+                    Some(n) => {
+                        let _ = ah.emit(
+                            "drop-typing://config-saved",
+                            serde_json::json!({
+                                "success": false,
+                                "error": format!("{key} 超出范围（50~10000ms）：{n}"),
+                            }),
+                        );
+                        return;
+                    }
+                    None => {
+                        let _ = ah.emit(
+                            "drop-typing://config-saved",
+                            serde_json::json!({
+                                "success": false,
+                                "error": format!("{key} 缺失或格式错误"),
+                            }),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
+        match cfg.save() {
+            Ok(()) => {
+                let _ = ah.emit(
+                    "drop-typing://config-saved",
+                    serde_json::json!({ "success": true }),
+                );
+                let _ = ah.emit("drop-typing://runtime-reload", serde_json::json!({}));
+            }
+            Err(e) => {
+                eprintln!("[drop-typing] general config save failed: {e}");
+                let _ = ah.emit(
+                    "drop-typing://config-saved",
+                    serde_json::json!({ "success": false, "error": e }),
+                );
+            }
+        }
+    });
+
+    // ── 语音控制（Command 词表 + 倒计时）：获取
+    let ah = app.clone();
+    app.listen("drop-typing://get-command-config", move |_| {
+        eprintln!("[drop-typing] get-command-config received");
+        let (cfg, _) = Config::load_lenient();
+        let cmd = serde_json::to_value(&cfg.command).unwrap_or_default();
+        let _ = ah.emit(
+            "drop-typing://command-config",
+            serde_json::json!({
+                "config": cmd,
+                "effective_command_countdown_ms": cfg.effective_command_countdown_ms(),
+            }),
+        );
+    });
+
+    // ── 语音控制（Command 词表 + 倒计时）：保存
+    let ah = app.clone();
+    app.listen("drop-typing://save-command-config", move |ev| {
+        eprintln!("[drop-typing] save-command-config received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        match serde_json::from_value::<CommandConfig>(payload) {
+            Ok(cmd) => {
+                let mut cfg = Config::load_lenient().0;
+                cfg.command = cmd;
+                match cfg.save() {
+                    Ok(()) => {
+                        let _ = ah.emit(
+                            "drop-typing://command-config-saved",
+                            serde_json::json!({ "success": true }),
+                        );
+                        let _ = ah.emit("drop-typing://runtime-reload", serde_json::json!({}));
+                    }
+                    Err(e) => {
+                        eprintln!("[drop-typing] command config save failed: {e}");
+                        let _ = ah.emit(
+                            "drop-typing://command-config-saved",
+                            serde_json::json!({ "success": false, "error": e }),
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                let msg = format!("指令配置解析失败：{e}");
+                eprintln!("[drop-typing] {msg}");
+                let _ = ah.emit(
+                    "drop-typing://command-config-saved",
+                    serde_json::json!({ "success": false, "error": msg }),
+                );
+            }
+        }
+    });
+
+    // ── 配置文件兜底编辑器：获取原文
+    let ah = app.clone();
+    app.listen("drop-typing://get-config-file", move |_| {
+        eprintln!("[drop-typing] get-config-file received");
+        let path = config_path();
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = ah.emit(
+            "drop-typing://config-file",
+            serde_json::json!({
+                "text": text,
+                "path": path.display().to_string(),
+                "exists": path.exists(),
+            }),
+        );
+    });
+
+    // ── 配置文件兜底编辑器：校验 + 整文件写回
+    let ah = app.clone();
+    app.listen("drop-typing://save-config-file", move |ev| {
+        eprintln!("[drop-typing] save-config-file received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let text = payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        match config::parse_config_file(&text) {
+            Err(e) => {
+                let _ = ah.emit(
+                    "drop-typing://config-file-saved",
+                    serde_json::json!({ "success": false, "error": e }),
+                );
+            }
+            Ok(new_cfg) => {
+                let old_cfg = Config::load_lenient().0;
+                let path = config_path();
+                let write_result = (|| -> Result<(), String> {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("无法创建配置目录 {}：{e}", parent.display()))?;
+                    }
+                    std::fs::write(&path, text.as_bytes())
+                        .map_err(|e| format!("配置文件写入失败（{}）：{e}", path.display()))
+                })();
+
+                match write_result {
+                    Ok(()) => {
+                        let restart = config::needs_restart(&old_cfg, &new_cfg);
+                        let _ = ah.emit("drop-typing://runtime-reload", serde_json::json!({}));
+                        let _ = ah.emit(
+                            "drop-typing://config-file-saved",
+                            serde_json::json!({
+                                "success": true,
+                                "restart_required": restart,
+                            }),
+                        );
+                        if restart {
+                            let _ = ah.emit(
+                                "drop-typing://restart-required",
+                                serde_json::json!({
+                                    "message": "配置中热键或唤醒词设置已变化，需要重启应用后才能生效。",
+                                }),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        let _ = ah.emit(
+                            "drop-typing://config-file-saved",
+                            serde_json::json!({ "success": false, "error": e }),
+                        );
+                    }
+                }
+            }
+        }
+    });
+
+    // ── ASR 测试连接
+    let ah = app.clone();
+    app.listen("drop-typing://test-asr", move |ev| {
+        eprintln!("[drop-typing] test-asr received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let mut cfg = Config::load_lenient().0;
+        if let Some(asr) = payload.get("asr") {
+            apply_asr_payload(&mut cfg, asr);
+        }
+        let Some(backend) = asr::backend_from_config(&cfg) else {
+            let _ = ah.emit(
+                "drop-typing://test-asr-result",
+                serde_json::json!({
+                    "success": false,
+                    "message": "配置无效：缺少 API Key 或协议未知",
+                }),
+            );
+            return;
+        };
+
+        let ah2 = ah.clone();
+        tauri::async_runtime::spawn(async move {
+            let result = run_asr_test(backend).await;
+            let (success, message) = match result {
+                Ok(msg) => (true, msg),
+                Err(e) => (false, e),
+            };
+            let _ = ah2.emit(
+                "drop-typing://test-asr-result",
+                serde_json::json!({ "success": success, "message": message }),
+            );
+        });
+    });
+
+    // ── LLM 测试连接
+    let ah = app.clone();
+    app.listen("drop-typing://test-llm", move |ev| {
+        eprintln!("[drop-typing] test-llm received");
+        let payload: serde_json::Value =
+            serde_json::from_str(ev.payload()).unwrap_or_default();
+        let mut cfg = Config::load_lenient().0;
+        if let Some(llm) = payload.get("llm") {
+            apply_llm_payload(&mut cfg, llm);
+        }
+        let Some(cleaner) = llm::cleaner_from_config(&cfg) else {
+            let _ = ah.emit(
+                "drop-typing://test-llm-result",
+                serde_json::json!({
+                    "success": false,
+                    "message": "配置无效：缺少 LLM API Key 或协议未知",
+                }),
+            );
+            return;
+        };
+
+        let ah2 = ah.clone();
+        tauri::async_runtime::spawn(async move {
+            let result =
+                tokio::time::timeout(Duration::from_secs(15), cleaner.clean("你好", "")).await;
+            let (success, message) = match &result {
+                Ok(Ok(text)) => (
+                    true,
+                    format!(
+                        "连接成功，LLM 返回：{}",
+                        text.trim().chars().take(60).collect::<String>()
+                    ),
+                ),
+                Ok(Err(e)) => (false, format!("LLM 调用失败：{e:#}")),
+                Err(_) => (false, "LLM 测试超时（15 秒）".to_string()),
+            };
+            let _ = ah2.emit(
+                "drop-typing://test-llm-result",
+                serde_json::json!({ "success": success, "message": message }),
+            );
+        });
+    });
+
     app.listen("drop-typing://restart", move |_| {
         eprintln!("[drop-typing] restart requested");
         let exe = std::env::current_exe().unwrap_or_default();

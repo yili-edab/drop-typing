@@ -37,7 +37,7 @@ fn default_command_countdown() -> u64 {
 
 // ── 语音指令词表条目类型（M4）──────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CommandActionEntry {
     pub phrase: String,
     #[serde(default)]
@@ -45,31 +45,31 @@ pub struct CommandActionEntry {
     pub key: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CommandModifierEntry {
     pub phrase: String,
     pub modifier: Modifier,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CommandKeyEntry {
     pub phrase: String,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CommandStopEntry {
     pub phrase: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CommandHomophoneEntry {
     pub phrase: String,
     pub letter: String,
 }
 
 /// 语音指令配置（M4 指令通道）。
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct CommandConfig {
     /// 倒计时毫秒（可选，覆盖顶层 command_countdown_ms）
     #[serde(default)]
@@ -97,7 +97,7 @@ pub struct CommandConfig {
 ///
 /// `keyword` 为自然语言关键词（如 "DT 打"），
 /// `action` 为检测到后进入的通道。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct KeywordEntry {
     /// 自然语言关键词（如 "DT 打"、"DT 修"）
     pub keyword: String,
@@ -114,7 +114,7 @@ pub struct KeywordEntry {
 ///
 /// sherpa-onnx 原生支持一个模型 + 多个 keywords，
 /// 不再区分 multi/single 模式。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct WakewordConfig {
     /// 是否开启唤醒词（默认 false）
     #[serde(default)]
@@ -208,7 +208,7 @@ impl<'de> Deserialize<'de> for Modifier {
 ///
 /// `protocol` 缺省时按旧版 `provider` 写法推断（向后兼容 `bailian-realtime` /
 /// `bailian-http` / `bailian`）。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct AsrConfig {
     #[serde(default = "default_asr_provider")]
     pub provider: String,
@@ -238,7 +238,7 @@ impl Default for AsrConfig {
 ///
 /// 与 ASR 同样约定：`provider` 是厂商名，`protocol` 决定适配器
 /// （`openai-chat` 默认 / `anthropic-messages`）。
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct LlmConfig {
     #[serde(default)]
     pub provider: Option<String>,
@@ -263,7 +263,7 @@ pub struct LlmConfig {
 ///
 /// 每条通道的按键由一组 KeySpec 字符串定义，运行时解析为 `Bindings`。
 /// 未配置时使用平台默认值。
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct HotkeyRawConfig {
     /// 输入/提交通道（长按录音，短按确认）
     #[serde(default)]
@@ -320,7 +320,7 @@ pub enum MouseButton {
 }
 
 /// 鼠标侧键绑定配置（`[hotkey.mouse]` 段）。
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct MouseHotkeyConfig {
     /// 输入/提交通道（前进键，长按录音、短按提交）
     #[serde(default)]
@@ -366,7 +366,7 @@ impl MouseHotkeyConfig {
 /// trigger = "forward"
 /// repair  = "back"
 /// ```
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct HotkeyConfig {
     /// 键盘快捷键（flatten 到 `[hotkey]` 顶层）
     #[serde(flatten)]
@@ -403,7 +403,7 @@ impl HotkeyConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub asr: AsrConfig,
@@ -599,5 +599,74 @@ impl Config {
         }
 
         (cfg, warning)
+    }
+}
+
+/// 解析配置文件原文（TOML 语法 + 类型校验）。
+///
+/// 供设置页「配置文件」面板兜底编辑使用；失败返回带行列号的错误，不写盘。
+pub fn parse_config_file(raw: &str) -> Result<Config, String> {
+    toml::from_str::<Config>(raw).map_err(|e| format_toml_error(raw, &e))
+}
+
+/// 将 toml 错误转换为带行列号的文案。
+pub fn format_toml_error(raw: &str, e: &toml::de::Error) -> String {
+    if let Some(span) = e.span() {
+        let pos = span.start.min(raw.len());
+        let line = raw[..pos].matches('\n').count() + 1;
+        let line_start = raw[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let col = pos.saturating_sub(line_start) + 1;
+        format!("第 {line} 行第 {col} 列：{e}")
+    } else {
+        e.to_string()
+    }
+}
+
+/// 判断新旧配置是否需要重启应用（热键或唤醒词段发生变化时返回 true）。
+pub fn needs_restart(old: &Config, new: &Config) -> bool {
+    old.hotkey != new.hotkey || old.wakeword != new.wakeword
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_config_file_rejects_invalid_toml_with_position() {
+        let raw = "long_press_threshold_ms = \"abc\"\nasr = [\n";
+        let err = parse_config_file(raw).unwrap_err();
+        assert!(err.contains("行"), "错误应包含行列信息：{err}");
+    }
+
+    #[test]
+    fn parse_config_file_accepts_valid_toml() {
+        let raw = "[asr]\nprovider = \"bailian\"\napi_key = \"sk-test\"\n\n[llm]\napi_key = \"sk-llm\"\n";
+        let cfg = parse_config_file(raw).expect("合法 TOML 应解析成功");
+        assert_eq!(cfg.asr.provider, "bailian");
+        assert_eq!(cfg.asr_api_key().as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn needs_restart_true_when_wakeword_changes() {
+        let old = Config::default();
+        let mut new = Config::default();
+        new.wakeword.enabled = true;
+        assert!(needs_restart(&old, &new));
+    }
+
+    #[test]
+    fn needs_restart_true_when_hotkey_changes() {
+        let old = Config::default();
+        let mut new = Config::default();
+        new.hotkey.keyboard.trigger = Some(vec!["MetaLeft".to_string()]);
+        assert!(needs_restart(&old, &new));
+    }
+
+    #[test]
+    fn needs_restart_false_when_only_llm_changes() {
+        let old = Config::default();
+        let mut new = Config::default();
+        new.llm.api_key = Some("sk-x".to_string());
+        assert!(!needs_restart(&old, &new));
     }
 }
