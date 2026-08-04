@@ -197,6 +197,14 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # phrase = "截图"
 # modifiers = ["Shift", "Cmd"]
 # key = "4"
+#
+# # 动作别名（脚本执行，预留）：说“跑备份” → 执行脚本。
+# # 当前版本解析到后仅提示「即将上线」，不会模拟按键，也不会执行脚本。
+# [[command.action]]
+# phrase = "跑备份"
+# modifiers = []
+# key = "C"
+# script = "/path/to/backup.sh"
 
 # # 修饰键别名
 # [[command.modifier]]

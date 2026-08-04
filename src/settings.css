@@ -375,6 +375,21 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
 .lex-key {
   width: 130px;
 }
+.lex-mode {
+  width: 110px;
+  flex: none;
+}
+.lex-combo {
+  width: 220px;
+  flex: none;
+}
+.lex-script {
+  width: 260px;
+  flex: none;
+}
+.lex-rec {
+  flex: none;
+}
 .lex-del {
   flex: none;
 }

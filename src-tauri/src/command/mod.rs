@@ -66,9 +66,26 @@ impl KeyCombo {
     }
 }
 
+/// 指令解析结果：按键组合，或预留的脚本执行钩子。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedCommand {
+    Combo(KeyCombo),
+    Script(String),
+}
+
+impl ParsedCommand {
+    /// 展示用文本：组合键如 "SHIFT+CMD+4"，脚本如 "SCRIPT:/path/to.sh"
+    pub fn display(&self) -> String {
+        match self {
+            ParsedCommand::Combo(c) => c.display(),
+            ParsedCommand::Script(s) => format!("SCRIPT:{s}"),
+        }
+    }
+}
+
 /// 提取出的 token
 enum Tok {
-    Action(Vec<Modifier>, String),
+    Action(Vec<Modifier>, String, Option<String>),
     Mod(Modifier),
     Key(String),
 }
@@ -192,7 +209,7 @@ fn matched_len(rest: &str, use_homophones: bool, lexicon: &Lexicon) -> usize {
 
 fn push_tok(toks: &mut Vec<Tok>, lex: &LexOwned) {
     match lex {
-        LexOwned::Action(m, k) => toks.push(Tok::Action(m.clone(), k.clone())),
+        LexOwned::Action(m, k, s) => toks.push(Tok::Action(m.clone(), k.clone(), s.clone())),
         LexOwned::Mod(m) => toks.push(Tok::Mod(*m)),
         LexOwned::Key(k) => toks.push(Tok::Key(k.clone())),
         LexOwned::Stop => {}
@@ -200,18 +217,23 @@ fn push_tok(toks: &mut Vec<Tok>, lex: &LexOwned) {
 }
 
 /// token 序列 → 按键组合
-fn assemble(toks: Vec<Tok>, unknown: usize, total: usize) -> Option<KeyCombo> {
+fn assemble(toks: Vec<Tok>, unknown: usize, total: usize) -> Option<ParsedCommand> {
     // 护栏：unknown 占比过半 → 整体判废（"哒哒哒哒" 不会碰巧命中）
     if total > 0 && unknown * 2 > total {
         return None;
     }
-    // 动作别名优先（"复制一下" → CMD+C）
+    // 动作别名优先（"复制一下" → CMD+C；带脚本的别名 → 脚本执行钩子）
     for t in &toks {
-        if let Tok::Action(m, k) = t {
-            return Some(KeyCombo {
+        if let Tok::Action(m, k, s) = t {
+            if let Some(script) = s {
+                if !script.trim().is_empty() {
+                    return Some(ParsedCommand::Script(script.clone()));
+                }
+            }
+            return Some(ParsedCommand::Combo(KeyCombo {
                 modifiers: m.clone(),
                 key: k.clone(),
-            });
+            }));
         }
     }
     // 收集修饰词与键名（各自去重）
@@ -241,24 +263,24 @@ fn assemble(toks: Vec<Tok>, unknown: usize, total: usize) -> Option<KeyCombo> {
             if mods.is_empty() && key.chars().count() == 1 {
                 return None;
             }
-            Some(KeyCombo {
+            Some(ParsedCommand::Combo(KeyCombo {
                 modifiers: mods,
                 key,
-            })
+            }))
         }
         _ => None,
     }
 }
 
-fn try_parse(normalized: &str, use_homophones: bool, lexicon: &Lexicon) -> Option<KeyCombo> {
+fn try_parse(normalized: &str, use_homophones: bool, lexicon: &Lexicon) -> Option<ParsedCommand> {
     let (toks, unknown, total) = scan(normalized, use_homophones, lexicon);
     assemble(toks, unknown, total)
 }
 
-/// 解析语音转写文本为按键组合；未命中返回 None。
+/// 解析语音转写文本为指令（按键组合或脚本钩子）；未命中返回 None。
 ///
 /// 两轮：第一轮不含谐音表；失败后再带谐音表重试。
-pub fn parse(text: &str, lexicon: &Lexicon) -> Option<KeyCombo> {
+pub fn parse(text: &str, lexicon: &Lexicon) -> Option<ParsedCommand> {
     let normalized = normalize(text);
     if normalized.is_empty() {
         return None;
@@ -267,16 +289,16 @@ pub fn parse(text: &str, lexicon: &Lexicon) -> Option<KeyCombo> {
     let squashed: String = normalized.chars().filter(|c| !c.is_whitespace()).collect();
     match squashed.as_str() {
         "ctrlc" | "controlc" => {
-            return Some(KeyCombo {
+            return Some(ParsedCommand::Combo(KeyCombo {
                 modifiers: vec![Modifier::Command],
                 key: "C".to_string(),
-            })
+            }))
         }
         "ctrlv" | "controlv" => {
-            return Some(KeyCombo {
+            return Some(ParsedCommand::Combo(KeyCombo {
                 modifiers: vec![Modifier::Command],
                 key: "V".to_string(),
-            })
+            }))
         }
         _ => {}
     }
@@ -337,6 +359,29 @@ mod tests {
         assert!(super::parse("shift", &builtin_lexicon()).is_none()); // 只有修饰词
         assert!(super::parse("command e f", &builtin_lexicon()).is_none()); // 两个键名
         assert!(super::parse("command 今天", &builtin_lexicon()).is_none()); // 无法识别的词
+    }
+
+    #[test]
+    fn hotkey_action_returns_combo() {
+        let lex = builtin_lexicon();
+        assert!(matches!(parse("复制", &lex), Some(ParsedCommand::Combo(_))));
+    }
+
+    #[test]
+    fn script_action_returns_script_command() {
+        use crate::config::CommandActionEntry;
+        let mut cfg = crate::config::CommandConfig::default();
+        cfg.action.push(CommandActionEntry {
+            phrase: "跑备份".to_string(),
+            modifiers: vec![],
+            key: "C".to_string(),
+            script: Some("/bin/sh backup.sh".to_string()),
+        });
+        let lex = Lexicon::build(Some(&cfg));
+        match parse("跑备份", &lex) {
+            Some(ParsedCommand::Script(path)) => assert_eq!(path, "/bin/sh backup.sh"),
+            other => panic!("期望 Script，实际 {other:?}"),
+        }
     }
 
     // ---- 新增：中文说法 ----
@@ -420,6 +465,7 @@ mod tests {
                 phrase: "截图".into(),
                 modifiers: vec![Modifier::Shift, Modifier::Command],
                 key: "4".into(),
+                script: None,
             }],
             ..Default::default()
         };
@@ -438,6 +484,7 @@ mod tests {
                 phrase: "截图".into(),
                 modifiers: vec![Modifier::Command],
                 key: "3".into(),
+                script: None,
             }],
             ..Default::default()
         };

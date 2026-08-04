@@ -43,6 +43,9 @@ pub struct CommandActionEntry {
     #[serde(default)]
     pub modifiers: Vec<Modifier>,
     pub key: String,
+    /// 预留的脚本执行钩子：配置后该别名优先执行脚本（当前版本提示未支持，不做按键模拟）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -644,6 +647,15 @@ mod tests {
         let cfg = parse_config_file(raw).expect("合法 TOML 应解析成功");
         assert_eq!(cfg.asr.provider, "bailian");
         assert_eq!(cfg.asr_api_key().as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn parse_config_file_accepts_action_with_script() {
+        let raw = "[[command.action]]\nphrase = \"跑备份\"\nmodifiers = []\nkey = \"C\"\nscript = \"/bin/sh backup.sh\"\n";
+        let cfg = parse_config_file(raw).expect("合法 TOML 应解析成功");
+        let a = &cfg.command.action[0];
+        assert_eq!(a.phrase, "跑备份");
+        assert_eq!(a.script.as_deref(), Some("/bin/sh backup.sh"));
     }
 
     #[test]

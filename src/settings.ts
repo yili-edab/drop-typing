@@ -418,11 +418,14 @@ listen<{
     styleSelectSettings.appendChild(opt);
   }
   styleSelectSettings.value = e.payload.current || '';
+  styleSelectSettings.requestUpdate?.();
 });
 
 styleSelectSettings.addEventListener('sl-change', () => {
   const val = styleSelectSettings.value || null;
   emit('drop-typing://select-style', { style: val });
+  const label = stylesList.find(s => s.key === val)?.label || '无';
+  toast('success', `已切换当前润色样式：${label}`);
 });
 
 // 添加样式结果
@@ -495,6 +498,8 @@ interface CommandEntry {
   modifier?: string;
   name?: string;
   letter?: string;
+  script?: string;
+  mode?: 'hotkey' | 'script';
 }
 
 interface CommandConfigState {
@@ -515,6 +520,81 @@ const KEY_OPTIONS = [
 ];
 const MOD_OPTIONS = ['Cmd', 'Opt', 'Ctrl', 'Shift'];
 const LETTER_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+const CMD_MOD_ORDER = ['Ctrl', 'Opt', 'Shift', 'Cmd'];
+
+let actionRecording: { row: CommandEntry; teardown: () => void } | null = null;
+
+function cmdKeyFromCode(code: string): string | null {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  const map: Record<string, string> = {
+    Enter: 'ENTER', Space: 'SPACE', Tab: 'TAB', Escape: 'ESC',
+    Backspace: 'DELETE', Delete: 'DELETE',
+    ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  };
+  if (map[code]) return map[code];
+  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  return null;
+}
+
+function formatActionCombo(row: CommandEntry): string {
+  const mods = [...(row.modifiers || [])]
+    .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
+  return [...mods, row.key || '?'].join(' + ');
+}
+
+function stopActionRecording() {
+  actionRecording?.teardown?.();
+  actionRecording = null;
+  renderLexRows('action');
+}
+
+function startActionRecording(row: CommandEntry) {
+  stopActionRecording();
+  const held: string[] = [];
+  const addMod = (m: string) => { if (!held.includes(m)) held.push(m); };
+  const removeMod = (m: string) => {
+    const i = held.indexOf(m);
+    if (i >= 0) held.splice(i, 1);
+  };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    e.preventDefault();
+    if (e.code === 'Escape') { stopActionRecording(); return; }
+    if (e.code.startsWith('Meta')) { addMod('Cmd'); return; }
+    if (e.code.startsWith('Alt')) { addMod('Opt'); return; }
+    if (e.code.startsWith('Control')) { addMod('Ctrl'); return; }
+    if (e.code.startsWith('Shift')) { addMod('Shift'); return; }
+    const key = cmdKeyFromCode(e.code);
+    if (!key) { toast('danger', `暂不支持的按键: ${e.code}`); return; }
+    row.modifiers = held.slice();
+    row.key = key;
+    stopActionRecording();
+  };
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (e.code.startsWith('Meta')) removeMod('Cmd');
+    if (e.code.startsWith('Alt')) removeMod('Opt');
+    if (e.code.startsWith('Control')) removeMod('Ctrl');
+    if (e.code.startsWith('Shift')) removeMod('Shift');
+  };
+
+  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
+  const timer = setTimeout(() => {
+    toast('danger', '录制超时，已取消');
+    stopActionRecording();
+  }, 10000);
+
+  actionRecording = {
+    row,
+    teardown: () => {
+      clearTimeout(timer);
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keyup', onKeyUp);
+    },
+  };
+  renderLexRows('action');
+}
 
 let commandConfig: CommandConfigState = {
   countdown_ms: null,
@@ -578,23 +658,63 @@ function renderLexRows(kind: string) {
     el.appendChild(phrase);
 
     if (kind === 'action') {
-      const mods = document.createElement('sl-select');
-      mods.className = 'lex-mods';
-      mods.size = 'small';
-      mods.multiple = true;
-      mods.placeholder = '修饰键';
-      for (const m of MOD_OPTIONS) {
-        const o = document.createElement('sl-option');
-        o.value = m;
-        o.textContent = m;
-        mods.appendChild(o);
-      }
-      mods.value = row.modifiers || [];
-      mods.addEventListener('sl-change', (e: any) => {
-        row.modifiers = [...(e.target.value || [])];
+      // 执行方式：默认快捷键，预留脚本执行钩子
+      const modeSel = document.createElement('sl-select');
+      modeSel.className = 'lex-mode';
+      modeSel.size = 'small';
+      const optHot = document.createElement('sl-option');
+      optHot.value = 'hotkey';
+      optHot.textContent = '快捷键';
+      const optScr = document.createElement('sl-option');
+      optScr.value = 'script';
+      optScr.textContent = '执行脚本';
+      modeSel.appendChild(optHot);
+      modeSel.appendChild(optScr);
+      const isScript = row.mode === 'script' || !!row.script;
+      modeSel.value = isScript ? 'script' : 'hotkey';
+      modeSel.addEventListener('sl-change', (e: any) => {
+        const v = e.target.value;
+        row.mode = v;
+        if (v === 'hotkey') row.script = '';
+        renderLexRows('action');
       });
-      el.appendChild(mods);
-      el.appendChild(makeKeySelect(row.key || 'C', v => { row.key = v; }));
+      el.appendChild(modeSel);
+
+      if (isScript) {
+        const scriptInput = document.createElement('sl-input');
+        scriptInput.className = 'lex-script';
+        scriptInput.size = 'small';
+        scriptInput.placeholder = '/path/to/script.sh';
+        scriptInput.value = row.script || '';
+        scriptInput.addEventListener('sl-input', (e: any) => {
+          row.script = e.target.value?.trim() || '';
+        });
+        el.appendChild(scriptInput);
+      } else {
+        // 快捷键：单个字段展示 + 直接录制
+        const comboInput = document.createElement('sl-input');
+        comboInput.className = 'lex-combo';
+        comboInput.size = 'small';
+        comboInput.readonly = true;
+        comboInput.placeholder = '点击「录制」';
+        comboInput.value = formatActionCombo(row);
+        el.appendChild(comboInput);
+
+        const recBtn = document.createElement('sl-button');
+        recBtn.className = 'lex-rec';
+        recBtn.size = 'small';
+        const recordingThis = actionRecording?.row === row;
+        recBtn.variant = recordingThis ? 'danger' : 'neutral';
+        recBtn.textContent = recordingThis ? '取消' : '录制';
+        recBtn.addEventListener('click', () => {
+          if (actionRecording?.row === row) {
+            stopActionRecording();
+          } else {
+            startActionRecording(row);
+          }
+        });
+        el.appendChild(recBtn);
+      }
     } else if (kind === 'modifier') {
       const modSel = document.createElement('sl-select');
       modSel.className = 'lex-key';
@@ -658,7 +778,12 @@ function buildCommandPayload() {
   const nonEmpty = <T>(arr: T[]): T[] => arr.filter((x: any) => (x.phrase || '').trim());
   return {
     countdown_ms: cmdCountdown.value ? parseInt(cmdCountdown.value, 10) : null,
-    action: nonEmpty(commandConfig.action),
+    action: nonEmpty(commandConfig.action).map(a => ({
+      phrase: a.phrase,
+      modifiers: a.modifiers || [],
+      key: a.key || '',
+      script: a.script || null,
+    })),
     modifier: nonEmpty(commandConfig.modifier),
     key: nonEmpty(commandConfig.key),
     stop: nonEmpty(commandConfig.stop),
@@ -686,7 +811,11 @@ listen<{ config: CommandConfigState; effective_command_countdown_ms: number }>(
     const c = e.payload.config || {};
     commandConfig = {
       countdown_ms: c.countdown_ms ?? null,
-      action: c.action || [],
+      action: (c.action || []).map((a: any) => ({
+        ...a,
+        script: a.script || '',
+        mode: a.script ? 'script' : 'hotkey',
+      })),
       modifier: c.modifier || [],
       key: c.key || [],
       stop: c.stop || [],

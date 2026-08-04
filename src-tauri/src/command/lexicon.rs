@@ -12,7 +12,8 @@ use super::Modifier;
 /// Owned 版本的词表条目（替代旧的 `Lex`，字段使用 String/Vec 以支持运行时构建）。
 #[derive(Debug, Clone)]
 pub(super) enum LexOwned {
-    Action(Vec<Modifier>, String),
+    /// 动作别名：修饰键 + 按键；`script` 为预留的脚本执行钩子（Some 时优先执行脚本）
+    Action(Vec<Modifier>, String, Option<String>),
     Mod(Modifier),
     Key(String),
     Stop,
@@ -68,7 +69,7 @@ fn add_user_entries(
     for a in &cfg.action {
         main.push((
             a.phrase.clone(),
-            LexOwned::Action(a.modifiers.clone(), a.key.clone()),
+            LexOwned::Action(a.modifiers.clone(), a.key.clone(), a.script.clone()),
         ));
     }
     for m in &cfg.modifier {
@@ -90,27 +91,31 @@ fn add_user_entries(
 
 // ---------- 内置词表 ----------
 
+fn act(mods: Vec<Modifier>, key: &str) -> LexOwned {
+    LexOwned::Action(mods, key.to_string(), None)
+}
+
 fn add_builtin_main(entries: &mut Vec<(String, LexOwned)>) {
     let cmd = vec![Modifier::Command];
     let shift_cmd = vec![Modifier::Shift, Modifier::Command];
 
     entries.extend([
         // ---- 动作别名 ----
-        ("复制".into(), LexOwned::Action(cmd.clone(), "C".into())),
-        ("拷贝".into(), LexOwned::Action(cmd.clone(), "C".into())),
-        ("copy".into(), LexOwned::Action(cmd.clone(), "C".into())),
-        ("粘贴".into(), LexOwned::Action(cmd.clone(), "V".into())),
-        ("黏贴".into(), LexOwned::Action(cmd.clone(), "V".into())),
-        ("paste".into(), LexOwned::Action(cmd.clone(), "V".into())),
-        ("剪切".into(), LexOwned::Action(cmd.clone(), "X".into())),
-        ("cut".into(), LexOwned::Action(cmd.clone(), "X".into())),
-        ("撤销".into(), LexOwned::Action(cmd.clone(), "Z".into())),
-        ("undo".into(), LexOwned::Action(cmd.clone(), "Z".into())),
-        ("重做".into(), LexOwned::Action(shift_cmd.clone(), "Z".into())),
-        ("redo".into(), LexOwned::Action(shift_cmd, "Z".into())), // shift_cmd moved
-        ("全选".into(), LexOwned::Action(cmd.clone(), "A".into())),
-        ("保存".into(), LexOwned::Action(cmd.clone(), "S".into())),
-        ("save".into(), LexOwned::Action(cmd, "S".into())), // cmd moved
+        ("复制".into(), act(cmd.clone(), "C")),
+        ("拷贝".into(), act(cmd.clone(), "C")),
+        ("copy".into(), act(cmd.clone(), "C")),
+        ("粘贴".into(), act(cmd.clone(), "V")),
+        ("黏贴".into(), act(cmd.clone(), "V")),
+        ("paste".into(), act(cmd.clone(), "V")),
+        ("剪切".into(), act(cmd.clone(), "X")),
+        ("cut".into(), act(cmd.clone(), "X")),
+        ("撤销".into(), act(cmd.clone(), "Z")),
+        ("undo".into(), act(cmd.clone(), "Z")),
+        ("重做".into(), act(shift_cmd.clone(), "Z")),
+        ("redo".into(), act(shift_cmd, "Z")), // shift_cmd moved
+        ("全选".into(), act(cmd.clone(), "A")),
+        ("保存".into(), act(cmd.clone(), "S")),
+        ("save".into(), act(cmd, "S")), // cmd moved
         // ---- 修饰词 ----
         ("shift".into(), LexOwned::Mod(Modifier::Shift)),
         ("换挡".into(), LexOwned::Mod(Modifier::Shift)),

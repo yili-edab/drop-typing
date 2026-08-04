@@ -1490,7 +1490,13 @@ fn run_command(
 ) {
     staging.set_status("");
     let combo = match command::parse(text, lexicon) {
-        Some(c) => c,
+        Some(command::ParsedCommand::Combo(c)) => c,
+        Some(command::ParsedCommand::Script(path)) => {
+            staging.error(&format!(
+                "指令关联了脚本「{path}」，脚本执行功能即将上线（当前未执行任何操作）"
+            ));
+            return;
+        }
         None => {
             staging.error(&format!("未识别到按键指令：{text}"));
             return;
