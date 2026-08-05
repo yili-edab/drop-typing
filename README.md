@@ -189,7 +189,7 @@ drop-typing/
 - 默认快捷键为 Win+Alt（录入）/ Ctrl+Alt（修复）/ Win+Shift（指令）；可在设置页勾选「区分左右」，把快捷键精确绑定到左侧或右侧修饰键（如只认右 Win + 右 Alt）。
 - App 运行期间，Win 单键、Win+E、Win+R 等系统快捷键保持可用；按住 Win+Alt 录音时开始菜单不会弹出（只有「属于 drop-typing 组合」的 Win 键事件会被拦截）。
 - 默认 Win+Shift 与系统截图 Win+Shift+S 存在键位冲突；如需保留系统截图，请把指令通道改为其它组合键。
-- 唤醒词模型随安装包（NSIS/MSI）分发；若直接运行裸 `drop-typing.exe`，需把项目里的 `src-tauri/models` 目录放在 exe 同目录。唤醒词加载或麦克风监听失败会在暂存条显示黄底红字提示。
+- 唤醒词模型随 NSIS 安装包分发；若直接运行裸 `drop-typing.exe`，需把项目里的 `src-tauri/models` 目录放在 exe 同目录。唤醒词加载或麦克风监听失败会在暂存条显示黄底红字提示。
 - script 动作：macOS 用 zsh（`/bin/zsh -lc`），Windows 用 `cmd.exe /C`；`.bat` / `.cmd` / `.ps1` 文件路径可直接执行。
 
 ## 热键方案决策
