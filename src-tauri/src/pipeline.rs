@@ -120,6 +120,16 @@ enum WakeCommand {
     Disable,
 }
 
+/// 唤醒词管理线程 → pipeline 的更新结果。
+enum WakeOutcome {
+    /// 引擎与监听均已就绪
+    Ready(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>),
+    /// 监听/引擎失败，附用户可理解的错误信息
+    Failed(String),
+    /// 已关闭
+    Disabled,
+}
+
 /// 录音器设备热切换命令（设置页保存 `[audio]` 后触发）。
 enum AudioCommand {
     /// 按设备名重建录音器（None = 跟随系统默认）。
@@ -130,7 +140,7 @@ enum AudioCommand {
 /// 收到命令后创建/停止监听，并把资源（环形缓冲 + 事件接收端）发给 pipeline。
 fn wake_manager_loop(
     rx: mpsc::Receiver<WakeCommand>,
-    out_tx: mpsc::Sender<Option<(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>)>>,
+    out_tx: mpsc::Sender<WakeOutcome>,
     resource_dir: std::path::PathBuf,
 ) {
     let mut listener: Option<ContinuousListener> = None;
@@ -139,7 +149,7 @@ fn wake_manager_loop(
             WakeCommand::Disable => {
                 // drop 即停止 cpal 流，麦克风指示灯熄灭
                 listener = None;
-                let _ = out_tx.send(None);
+                let _ = out_tx.send(WakeOutcome::Disabled);
             }
             WakeCommand::Enable(wcfg, device_name) => {
                 // 配置变化时先停旧流，再按新配置重建
@@ -154,15 +164,23 @@ fn wake_manager_loop(
                             let buf = l.buffer.clone();
                             let wake_rx = ContinuousListener::start_wake_word(buf.clone(), eng);
                             listener = Some(l);
-                            let _ = out_tx.send(Some((wcfg, buf, wake_rx)));
+                            let _ = out_tx.send(WakeOutcome::Ready(wcfg, buf, wake_rx));
                         } else {
                             eprintln!("[drop-typing] 唤醒词引擎创建失败（模型缺失？）");
-                            let _ = out_tx.send(None);
+                            let _ = out_tx.send(WakeOutcome::Failed(
+                                "唤醒词模型缺失或加载失败：请使用安装包安装；\
+                                 裸 exe 需在 exe 同目录放置 models 目录，\
+                                 或在设置页检查唤醒词模型目录。"
+                                    .into(),
+                            ));
                         }
                     }
                     Err(e) => {
                         eprintln!("[drop-typing] 唤醒词监听器启动失败：{e}");
-                        let _ = out_tx.send(None);
+                        let _ = out_tx.send(WakeOutcome::Failed(format!(
+                            "麦克风监听启动失败：{e}\
+                             （请检查 Windows 设置 → 隐私 → 麦克风是否允许桌面应用访问）"
+                        )));
                     }
                 }
             }
@@ -219,9 +237,7 @@ pub fn start(app: AppHandle) {
     // 唤醒词（Phase 1）：独立管理线程持有 cpal 持续监听流，
     // 支持运行中热开关（设置页保存后经 runtime-reload 命令重建/停止）。
     let (wake_cmd_tx, wake_cmd_rx) = mpsc::channel::<WakeCommand>();
-    let (wake_out_tx, wake_out_rx) = mpsc::channel::<
-        Option<(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>)>,
-    >();
+    let (wake_out_tx, wake_out_rx) = mpsc::channel::<WakeOutcome>();
     let wake_resource_dir = app.path().resource_dir().unwrap_or_default();
     std::thread::Builder::new()
         .name("drop-typing-wake-manager".into())
@@ -318,9 +334,7 @@ fn run_loop(
     staging: Staging,
     rx: mpsc::Receiver<HotkeyEvent>,
     current_style: Arc<Mutex<Option<String>>>,
-    wake_out_rx: mpsc::Receiver<
-        Option<(WakewordConfig, Arc<RingBuffer>, mpsc::Receiver<WakeEvent>)>,
-    >,
+    wake_out_rx: mpsc::Receiver<WakeOutcome>,
     audio_rx: mpsc::Receiver<AudioCommand>,
     initial_audio_device: Option<String>,
 ) {
@@ -371,7 +385,7 @@ fn run_loop(
         // 唤醒词热开关：应用管理线程发来的资源更新（启/停麦克风监听）
         while let Ok(update) = wake_out_rx.try_recv() {
             match update {
-                Some((wcfg, buf, wrx)) => {
+                WakeOutcome::Ready(wcfg, buf, wrx) => {
                     wake_cfg = Some(wcfg);
                     wake_buffer = Some(buf);
                     wake_rx = Some(wrx);
@@ -379,13 +393,22 @@ fn run_loop(
                         state = State::Listening;
                     }
                 }
-                None => {
+                WakeOutcome::Disabled => {
                     wake_cfg = None;
                     wake_buffer = None;
                     wake_rx = None;
                     if matches!(state, State::Listening) {
                         state = State::Idle;
                     }
+                }
+                WakeOutcome::Failed(msg) => {
+                    wake_cfg = None;
+                    wake_buffer = None;
+                    wake_rx = None;
+                    if matches!(state, State::Listening) {
+                        state = State::Idle;
+                    }
+                    staging.error(&format!("唤醒词不可用：{msg}"));
                 }
             }
         }
