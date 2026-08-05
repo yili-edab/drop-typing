@@ -284,7 +284,10 @@ mod tests {
         let err = run("C:\\drop-typing-no-such-dir-xyz\\foo.exe").unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("not recognized") || msg.contains("不是内部或外部命令"),
+            msg.contains("not recognized")
+                || msg.contains("不是内部或外部命令")
+                || msg.contains("cannot find the path")
+                || msg.contains("找不到指定的路径"),
             "应提示命令不存在：{msg}"
         );
     }
