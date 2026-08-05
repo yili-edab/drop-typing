@@ -1,11 +1,11 @@
 # Dependencies
-node_modules/
+node_modules
 
 # Frontend build output
 dist/
 
 # Rust / Tauri build output
-src-tauri/target/
+src-tauri/target
 src-tauri/gen/
 
 # Isolated git worktrees
