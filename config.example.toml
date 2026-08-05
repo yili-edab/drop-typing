@@ -50,10 +50,10 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # 视为双击（清空暂存条）；超时未等到第二击则确认为单击（提交暂存条）。
 # double_press_window_ms = 350
 
-# 语音指令确认倒计时（毫秒，默认 2000）：长按右 ⇧ 说出按键指令（如"复制"、
+# 语音指令确认倒计时（毫秒，默认 1000）：长按右 ⇧ 说出按键指令（如"复制"、
 # "Shift Command E"）解析完成后，在暂存条上大字展示指令并倒计时，到 0 自动模拟
 # 该按键；倒计时期间按下任意右修饰键（开始新录音）可取消执行。
-# command_countdown_ms = 2000
+# command_countdown_ms = 1000
 
 # ── 唤醒词（sherpa-onnx KeywordSpotter）────────────────────────────
 #

@@ -32,7 +32,7 @@ fn default_double_press_window() -> u64 {
 }
 
 fn default_command_countdown() -> u64 {
-    2000
+    1000
 }
 
 // ── 语音指令词表条目类型（M4）──────────────────────────────────────────

@@ -34,6 +34,10 @@ use crate::script;
 use crate::staging::Staging;
 use crate::wakeword::{self, WakeEvent, WakeWord};
 
+/// 实时 ASR 松手后等待后台建连的总预算。
+/// 必须 ≥ 适配器内部的建连超时（bailian_realtime.rs 的 CONNECT_TIMEOUT = 3s）。
+const SESSION_WAIT_TIMEOUT: Duration = Duration::from_secs(4);
+
 /// 录音目的：输入通道（右 ⌘）、修正通道（右 ⌥）还是指令通道（右 ⇧，M4）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[derive(Debug)]
@@ -71,6 +75,8 @@ enum State {
         session: Option<Arc<dyn RealtimeSession>>,
         /// 后台建连中：会话尚未就绪时暂存 Receiver，松手时取回
         pending_rx: Option<mpsc::Receiver<anyhow::Result<Arc<dyn RealtimeSession>>>>,
+        /// 音频转发器完成信号：所有缓冲 PCM 已送入会话后通知（finish 前须等待）
+        fwd_done_rx: Option<mpsc::Receiver<()>>,
         /// 录音是否由鼠标侧键启动（用于跨设备 taint 判定）
         started_by_mouse: bool,
         /// 唤醒词触发（None = 热键触发）
@@ -629,6 +635,7 @@ fn run_loop(
                 let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
                 let session = None;
                 let mut pending_rx = None;
+                let mut fwd_done_rx = None;
 
                 if let Some(b) = &backend {
                     if let AsrBackend::Realtime(p) = b.as_ref() {
@@ -644,36 +651,8 @@ fn run_loop(
                             }
                         });
 
-                        // 音频转发器：缓冲录音数据，等会话就绪后补发 + 续传
                         let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-                        std::thread::spawn(move || {
-                            let mut buf: Vec<Vec<u8>> = Vec::new();
-                            let mut sess: Option<Arc<dyn RealtimeSession>> = None;
-                            loop {
-                                if sess.is_none() {
-                                    if let Ok(s) = fwd_rx.try_recv() {
-                                        for chunk in buf.drain(..) {
-                                            if s.send_audio(&chunk).is_err() {
-                                                return;
-                                            }
-                                        }
-                                        sess = Some(s);
-                                    }
-                                }
-                                match pcm_rx.recv() {
-                                    Ok(chunk) => {
-                                        if let Some(ref s) = sess {
-                                            if s.send_audio(&chunk).is_err() {
-                                                return;
-                                            }
-                                        } else {
-                                            buf.push(chunk);
-                                        }
-                                    }
-                                    Err(_) => return,
-                                }
-                            }
-                        });
+                        fwd_done_rx = Some(spawn_audio_forwarder(pcm_rx, fwd_rx));
 
                         // 后台建连，不阻塞事件循环
                         let p = Arc::clone(p);
@@ -704,6 +683,7 @@ fn run_loop(
                     pending_since: carry_pending,
                     session,
                     pending_rx,
+                    fwd_done_rx,
                     started_by_mouse: false,  // 键盘启动
                     wake_word: None,
                     wake_finish_rx: None,
@@ -757,6 +737,7 @@ fn run_loop(
                     let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
                     let session = None;
                     let mut pending_rx = None;
+                    let mut fwd_done_rx = None;
 
                     if let Some(b) = &backend {
                         if let AsrBackend::Realtime(p) = b.as_ref() {
@@ -772,34 +753,7 @@ fn run_loop(
                             });
 
                             let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-                            std::thread::spawn(move || {
-                                let mut buf: Vec<Vec<u8>> = Vec::new();
-                                let mut sess: Option<Arc<dyn RealtimeSession>> = None;
-                                loop {
-                                    if sess.is_none() {
-                                        if let Ok(s) = fwd_rx.try_recv() {
-                                            for chunk in buf.drain(..) {
-                                                if s.send_audio(&chunk).is_err() {
-                                                    return;
-                                                }
-                                            }
-                                            sess = Some(s);
-                                        }
-                                    }
-                                    match pcm_rx.recv() {
-                                        Ok(chunk) => {
-                                            if let Some(ref s) = sess {
-                                                if s.send_audio(&chunk).is_err() {
-                                                    return;
-                                                }
-                                            } else {
-                                                buf.push(chunk);
-                                            }
-                                        }
-                                        Err(_) => return,
-                                    }
-                                }
-                            });
+                            fwd_done_rx = Some(spawn_audio_forwarder(pcm_rx, fwd_rx));
 
                             let p = Arc::clone(p);
                             let (sess_tx, sess_rx) = mpsc::channel();
@@ -829,6 +783,7 @@ fn run_loop(
                         pending_since: carry_pending,
                         session,
                         pending_rx,
+                        fwd_done_rx,
                         started_by_mouse: true,  // 鼠标启动
                         wake_word: None,
                     wake_finish_rx: None,
@@ -846,6 +801,7 @@ fn run_loop(
                     pending_since,
                     session,
                     pending_rx,
+                    fwd_done_rx,
                     wake_word: _,
                     wake_finish_rx: _,
                     started_by_mouse: _,
@@ -859,26 +815,16 @@ fn run_loop(
                 let Some(r) = &recorder else { continue };
                 let duration = started.elapsed();
 
-                let mut session = session;
-                let mut session_err: Option<String> = None;
-                if duration >= threshold {
-                    if let Some(rx) = pending_rx {
-                        match rx.try_recv() {
-                            Ok(Ok(s)) => session = Some(s),
-                            Ok(Err(e)) => session_err = Some(format!("{e:#}")),
-                            Err(_) => session_err = Some("ASR 会话建立超时".into()),
-                        }
-                    }
-                } else {
-                    drop(pending_rx);
-                }
-
                 if tainted {
+                    drop(pending_rx);
+                    drop(fwd_done_rx);
                     r.discard();
                     staging.set_status("");
                     staging.set_repair_note("");
                     staging.hide();
                 } else if duration < threshold {
+                    drop(pending_rx);
+                    drop(fwd_done_rx);
                     r.discard();
                     staging.set_status("");
                     match mode {
@@ -910,57 +856,17 @@ fn run_loop(
                     }
                 } else {
                     // 长按：与键盘逻辑完全相同
-                    match (&backend, session) {
-                        (Some(b), Some(s)) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
-                            r.discard();
-                            staging.set_busy(true);
-                            staging.set_status(mode.recognizing_label());
-                            let result = s.finish();
-                            staging.set_busy(false);
-                            match result {
-                                Ok(text) if !text.trim().is_empty() => {
-                                    match mode {
-                                        RecordMode::Input => {
-                                            let pc = prompts::load_prompts();
-                                            let prompt = {
-                                                let style = current_style.lock().unwrap().clone();
-                                                prompts::effective_clean_prompt(&pc, style.as_deref())
-                                            };
-                                            clean_and_append(&staging, &cleaner, text.trim(), &prompt)
-                                        }
-                                        RecordMode::Repair => {
-                                            repair_and_replace(&staging, &cleaner, text.trim())
-                                        }
-                                        RecordMode::Command => run_command(
-                                            &staging,
-                                            &injector,
-                                            text.trim(),
-                                            command_countdown,
-                                            &command_gen,
-                                            &lexicon,
-                                        ),
-                                    }
-                                }
-                                Ok(_) => {
-                                    staging.set_status("");
-                                    staging.error("ASR 返回空文本")
-                                }
-                                Err(e) => {
-                                    staging.set_status("");
-                                    staging.error(&format!("ASR 失败：{e}"))
-                                }
-                            }
+                    match &backend {
+                        Some(b) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
+                            finish_realtime_recording(
+                                &staging, r, session, pending_rx, fwd_done_rx, mode,
+                                &cleaner, &injector, command_countdown, &command_gen,
+                                &lexicon, &current_style,
+                            );
                         }
-                        (Some(b), None) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
-                            r.discard();
-                            staging.set_status("");
-                            if let Some(e) = session_err {
-                                staging.error(&format!("ASR 会话建立失败：{e}"));
-                            } else {
-                                staging.error("ASR 会话未建立");
-                            }
-                        }
-                        (Some(b), _) => {
+                        Some(b) => {
+                            drop(pending_rx);
+                            drop(fwd_done_rx);
                             let AsrBackend::Batch(p) = b.as_ref() else {
                                 unreachable!()
                             };
@@ -982,7 +888,9 @@ fn run_loop(
                                 }
                             }
                         }
-                        (None, _) => {
+                        None => {
+                            drop(pending_rx);
+                            drop(fwd_done_rx);
                             r.discard();
                             staging.set_status("");
                             staging.error("未配置 ASR API Key，无法转写。");
@@ -1001,6 +909,7 @@ fn run_loop(
                     pending_since,
                     session,
                     pending_rx,
+                    fwd_done_rx,
                     wake_word: _,
                     wake_finish_rx: _,
                     started_by_mouse: _,
@@ -1014,29 +923,18 @@ fn run_loop(
                 let Some(r) = &recorder else { continue };
                 let duration = started.elapsed();
 
-                // 尝试从后台建连取回会话（短按直接丢弃，不等待）
-                let mut session = session;
-                let mut session_err: Option<String> = None;
-                if duration >= threshold {
-                    if let Some(rx) = pending_rx {
-                        match rx.try_recv() {
-                            Ok(Ok(s)) => session = Some(s),
-                            Ok(Err(e)) => session_err = Some(format!("{e:#}")),
-                            Err(_) => session_err = Some("ASR 会话建立超时".into()),
-                        }
-                    }
-                } else {
-                    drop(pending_rx);
-                }
-
                 if tainted {
                     // 修饰键被用作组合键（如 ⌘Space 或双修饰键同时按下），作废
+                    drop(pending_rx);
+                    drop(fwd_done_rx);
                     r.discard();
                     staging.set_status("");
                     staging.set_repair_note("");
                     staging.hide();
                 } else if duration < threshold {
                     // 短按
+                    drop(pending_rx);
+                    drop(fwd_done_rx);
                     r.discard();
                     staging.set_status("");
                     match mode {
@@ -1076,57 +974,17 @@ fn run_loop(
                     }
                 } else {
                     // 长按：停止录音 → ASR → 按 mode 分发
-                    match (&backend, session) {
-                        (Some(b), Some(s)) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
-                            r.discard(); // 实时路径不需要本地 WAV
-                            staging.set_busy(true);
-                            staging.set_status(mode.recognizing_label());
-                            let result = s.finish();
-                            staging.set_busy(false);
-                            match result {
-                                Ok(text) if !text.trim().is_empty() => {
-                                    match mode {
-                                        RecordMode::Input => {
-                                            let pc = prompts::load_prompts();
-                                            let prompt = {
-                                                let style = current_style.lock().unwrap().clone();
-                                                prompts::effective_clean_prompt(&pc, style.as_deref())
-                                            };
-                                            clean_and_append(&staging, &cleaner, text.trim(), &prompt)
-                                        }
-                                        RecordMode::Repair => {
-                                            repair_and_replace(&staging, &cleaner, text.trim())
-                                        }
-                                        RecordMode::Command => run_command(
-                                            &staging,
-                                            &injector,
-                                            text.trim(),
-                                            command_countdown,
-                                            &command_gen,
-                                            &lexicon,
-                                        ),
-                                    }
-                                }
-                                Ok(_) => {
-                                    staging.set_status("");
-                                    staging.error("ASR 返回空文本")
-                                }
-                                Err(e) => {
-                                    staging.set_status("");
-                                    staging.error(&format!("ASR 失败：{e}"))
-                                }
-                            }
+                    match &backend {
+                        Some(b) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
+                            finish_realtime_recording(
+                                &staging, r, session, pending_rx, fwd_done_rx, mode,
+                                &cleaner, &injector, command_countdown, &command_gen,
+                                &lexicon, &current_style,
+                            );
                         }
-                        (Some(b), None) if matches!(b.as_ref(), AsrBackend::Realtime(_)) => {
-                            r.discard();
-                            staging.set_status("");
-                            if let Some(e) = session_err {
-                                staging.error(&format!("ASR 会话建立失败：{e}"));
-                            } else {
-                                staging.error("ASR 会话未建立");
-                            }
-                        }
-                        (Some(b), _) => {
+                        Some(b) => {
+                            drop(pending_rx);
+                            drop(fwd_done_rx);
                             let AsrBackend::Batch(p) = b.as_ref() else {
                                 unreachable!()
                             };
@@ -1148,7 +1006,9 @@ fn run_loop(
                                 }
                             }
                         }
-                        (None, _) => {
+                        None => {
+                            drop(pending_rx);
+                            drop(fwd_done_rx);
                             r.discard();
                             staging.set_status("");
                             staging.error("未配置 ASR API Key，无法转写。");
@@ -1159,6 +1019,159 @@ fn run_loop(
             }, // match ev
         } // match recv_timeout
     } // loop
+}
+
+// ── 实时 ASR 音频转发与松手收尾 ────────────────────────────────────
+
+/// 音频转发器：把录音 PCM 喂给实时 ASR 会话。
+///
+/// 会话在后台建连，可能晚于录音结束，因此需要缓冲 PCM：
+/// - 录音进行中：会话未到则入队，到了立即补发并续传；
+/// - 录音结束（pcm 通道关闭）：若会话尚未到，继续等待它
+///   （建连线程结束时 fwd_tx 被 drop，等待随之结束），到后再补发全部缓冲；
+/// - 所有缓冲音频送入会话后通过返回的 done 信号通知调用方，
+///   调用方收到 done 后才能发 finish-task，避免服务端先收到空音频。
+fn spawn_audio_forwarder(
+    pcm_rx: mpsc::Receiver<Vec<u8>>,
+    fwd_rx: mpsc::Receiver<Arc<dyn RealtimeSession>>,
+) -> mpsc::Receiver<()> {
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf: Vec<Vec<u8>> = Vec::new();
+        let mut sess: Option<Arc<dyn RealtimeSession>> = None;
+        loop {
+            if sess.is_none() {
+                if let Ok(s) = fwd_rx.try_recv() {
+                    for chunk in buf.drain(..) {
+                        if s.send_audio(&chunk).is_err() {
+                            let _ = done_tx.send(());
+                            return;
+                        }
+                    }
+                    sess = Some(s);
+                }
+            }
+            match pcm_rx.recv() {
+                Ok(chunk) => {
+                    if let Some(ref s) = sess {
+                        if s.send_audio(&chunk).is_err() {
+                            let _ = done_tx.send(());
+                            return;
+                        }
+                    } else {
+                        buf.push(chunk);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        // 录音结束：若会话尚未到，等待它（会话建立成功/失败都会让 recv 返回）
+        if sess.is_none() {
+            if let Ok(s) = fwd_rx.recv() {
+                for chunk in buf.drain(..) {
+                    if s.send_audio(&chunk).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = done_tx.send(());
+    });
+    done_rx
+}
+
+/// 实时后端松手收尾，按确认过的时序执行：
+/// 1. 先看转发器是否已发“音频已全部送入会话”（done）——已到就直接准备 finish；
+/// 2. 未到则最多等 `SESSION_WAIT_TIMEOUT`（4s），期间只要提前收到就立即继续；
+/// 3. 取回建连结果：成功 → finish；失败/超时 → 报错，不能发 finish
+///    （否则服务端又会先收到结束指令而报 EmptyAudio）。
+#[allow(clippy::too_many_arguments)]
+fn finish_realtime_recording(
+    staging: &Staging,
+    recorder: &AudioRecorder,
+    session: Option<Arc<dyn RealtimeSession>>,
+    pending_rx: Option<mpsc::Receiver<anyhow::Result<Arc<dyn RealtimeSession>>>>,
+    fwd_done_rx: Option<mpsc::Receiver<()>>,
+    mode: RecordMode,
+    cleaner: &Option<Arc<dyn TextCleaner>>,
+    injector: &Arc<dyn Injector>,
+    command_countdown: Duration,
+    command_gen: &Arc<AtomicU64>,
+    lexicon: &command::Lexicon,
+    current_style: &Arc<Mutex<Option<String>>>,
+) {
+    recorder.discard(); // 实时路径不需要本地 WAV
+
+    let mut session = session;
+    let mut session_err: Option<String> = None;
+
+    // 1/2. 等“已发送成功”：已收到则直接往下走；没收到最多等 4s，期间一到立即继续
+    let done_ok = match fwd_done_rx {
+        Some(done_rx) => done_rx.recv_timeout(SESSION_WAIT_TIMEOUT).is_ok(),
+        None => true,
+    };
+    if !done_ok {
+        session_err = Some("ASR 会话建立超时".into());
+    }
+
+    // 3. 转发器结束（成功或失败）后，建连结果必然已投递；这里只做极短兜底，
+    //    不会额外增加等待预算
+    if let Some(rx) = pending_rx {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(Ok(s)) => session = Some(s),
+            Ok(Err(e)) => session_err = Some(format!("{e:#}")),
+            Err(_) if session_err.is_none() => session_err = Some("ASR 会话建立超时".into()),
+            Err(_) => {}
+        }
+    }
+    let Some(s) = session else {
+        staging.set_status("");
+        staging.error(&format!(
+            "ASR 会话建立失败：{}",
+            session_err.unwrap_or_else(|| "未知错误".to_string())
+        ));
+        return;
+    };
+
+    if !done_ok {
+        staging.set_status("");
+        staging.error("音频未能在 4 秒内送达，已放弃本次识别");
+        return;
+    }
+
+    staging.set_busy(true);
+    staging.set_status(mode.recognizing_label());
+    let result = s.finish();
+    staging.set_busy(false);
+    match result {
+        Ok(text) if !text.trim().is_empty() => match mode {
+            RecordMode::Input => {
+                let pc = prompts::load_prompts();
+                let prompt = {
+                    let style = current_style.lock().unwrap().clone();
+                    prompts::effective_clean_prompt(&pc, style.as_deref())
+                };
+                clean_and_append(staging, cleaner, text.trim(), &prompt)
+            }
+            RecordMode::Repair => repair_and_replace(staging, cleaner, text.trim()),
+            RecordMode::Command => run_command(
+                staging,
+                injector,
+                text.trim(),
+                command_countdown,
+                command_gen,
+                lexicon,
+            ),
+        },
+        Ok(_) => {
+            staging.set_status("");
+            staging.error("ASR 返回空文本")
+        }
+        Err(e) => {
+            staging.set_status("");
+            staging.error(&format!("ASR 失败：{e}"))
+        }
+    }
 }
 
 // ── 唤醒词 → RecordMode 映射 ────────────────────────────────────────
@@ -1259,36 +1272,8 @@ fn start_wake_recording(
         }
     });
 
-    // 音频转发器：缓冲 TailReader 数据，等会话就绪后补发 + 续传
     let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-    std::thread::spawn(move || {
-        let mut buf: Vec<Vec<u8>> = Vec::new();
-        let mut sess: Option<Arc<dyn RealtimeSession>> = None;
-        loop {
-            if sess.is_none() {
-                if let Ok(s) = fwd_rx.try_recv() {
-                    for chunk in buf.drain(..) {
-                        if s.send_audio(&chunk).is_err() {
-                            return;
-                        }
-                    }
-                    sess = Some(s);
-                }
-            }
-            match pcm_rx.recv() {
-                Ok(chunk) => {
-                    if let Some(ref s) = sess {
-                        if s.send_audio(&chunk).is_err() {
-                            return;
-                        }
-                    } else {
-                        buf.push(chunk);
-                    }
-                }
-                Err(_) => return,
-            }
-        }
-    });
+    let fwd_done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx);
 
     // 后台建连
     let (sess_tx, sess_rx) = mpsc::channel();
@@ -1351,7 +1336,15 @@ fn start_wake_recording(
             drop(pcm_tx); // 通知音频转发器结束
             // 等待 session 完成（通过 sess_rx），然后 finish
             let result = match sess_rx.recv() {
-                Ok(Ok(session)) => session.finish(),
+                Ok(Ok(session)) => {
+                    // 与热键路径一致：先等“音频已全部送入会话”，最多 4s；
+                    // 收不到就不发 finish，避免服务端收到空音频
+                    if fwd_done_rx.recv_timeout(SESSION_WAIT_TIMEOUT).is_err() {
+                        Err(anyhow::anyhow!("音频未能在 4 秒内送达，已放弃本次识别"))
+                    } else {
+                        session.finish()
+                    }
+                }
                 Ok(Err(e)) => Err(anyhow::anyhow!("ASR 会话建立失败：{e:#}")),
                 Err(_) => Err(anyhow::anyhow!("ASR 会话建立超时")),
             };
@@ -1372,6 +1365,7 @@ fn start_wake_recording(
         pending_since: None,
         session: None,
         pending_rx: None,
+        fwd_done_rx: None,
         started_by_mouse: false,
         wake_word: Some(word),
         wake_finish_rx: Some(finish_rx),
@@ -1448,6 +1442,84 @@ fn commit(staging: &Staging, injector: &dyn Injector) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
+
+    /// 记录收到的音频块与 finish 调用次数的假会话。
+    struct RecordingSession {
+        audio_chunks: StdMutex<Vec<Vec<u8>>>,
+        finish_calls: AtomicUsize,
+    }
+
+    impl RecordingSession {
+        fn new() -> Self {
+            Self {
+                audio_chunks: StdMutex::new(Vec::new()),
+                finish_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl RealtimeSession for RecordingSession {
+        fn send_audio(&self, pcm: &[u8]) -> anyhow::Result<()> {
+            self.audio_chunks.lock().unwrap().push(pcm.to_vec());
+            Ok(())
+        }
+
+        fn finish(&self) -> anyhow::Result<String> {
+            self.finish_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(String::new())
+        }
+    }
+
+    #[test]
+    fn forwarder_delivers_audio_when_session_arrives_after_recording_ends() {
+        // 复现原 bug 的时序：录音结束、会话才建立。
+        // 旧的转发器会在 PCM 通道关闭时直接退出，导致缓冲音频丢失、
+        // 服务端收到空音频（EmptyAudio）。
+        let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
+        let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
+        let done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx);
+
+        pcm_tx.send(vec![1]).unwrap();
+        pcm_tx.send(vec![2]).unwrap();
+        drop(pcm_tx); // 录音结束，会话还没到
+
+        let sess = Arc::new(RecordingSession::new());
+        fwd_tx.send(sess.clone()).unwrap();
+        drop(fwd_tx);
+
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("转发器应在收到会话后完成");
+        assert_eq!(sess.audio_chunks.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn forwarder_done_precedes_finish_with_all_audio() {
+        // 模拟 pipeline 的松手顺序：等 done 后再 finish，
+        // 保证服务端不会先收到 finish-task 而报 EmptyAudio。
+        let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
+        let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
+        let done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx);
+
+        pcm_tx.send(vec![9, 9]).unwrap();
+        drop(pcm_tx);
+
+        let sess = Arc::new(RecordingSession::new());
+        fwd_tx.send(sess.clone()).unwrap();
+        drop(fwd_tx);
+
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("转发器应在收到会话后完成");
+        sess.finish().unwrap();
+
+        let chunks = sess.audio_chunks.lock().unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], vec![9, 9]);
+        assert_eq!(sess.finish_calls.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn runtime_state_defaults() {
@@ -1456,7 +1528,7 @@ mod tests {
         assert!(st.cleaner.is_none());
         assert_eq!(st.threshold, Duration::from_millis(150));
         assert_eq!(st.double_press, Duration::from_millis(350));
-        assert_eq!(st.command_countdown, Duration::from_millis(2000));
+        assert_eq!(st.command_countdown, Duration::from_millis(1000));
         assert!(st.lexicon.entry_count() > 0);
     }
 
