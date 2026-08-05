@@ -149,6 +149,48 @@ impl KeySpec {
     }
 }
 
+/// 修饰键（Windows 组合只允许修饰键参与）。
+pub(crate) fn is_modifier_key(key: &Key) -> bool {
+    matches!(
+        key,
+        Key::ControlLeft
+            | Key::ControlRight
+            | Key::MetaLeft
+            | Key::MetaRight
+            | Key::Alt
+            | Key::AltGr
+            | Key::ShiftLeft
+            | Key::ShiftRight
+    )
+}
+
+/// 一组 KeySpec 是否全部被「当前按下的修饰键集合」满足。
+/// 家族规格（Family）任意一侧即可；精确规格（Exact）必须该物理键按下。
+pub(crate) fn specs_matched_by_pressed(
+    specs: &[KeySpec],
+    pressed: &std::collections::HashSet<Key>,
+) -> bool {
+    !specs.is_empty()
+        && specs.iter().all(|s| match s {
+            KeySpec::Family(f) => pressed.iter().any(|k| f.matches(k)),
+            KeySpec::Exact(k) => pressed.contains(k),
+        })
+}
+
+/// 某个键是否属于这组 KeySpec（组合结束 / taint 判定）。
+pub(crate) fn key_matches_any_spec(key: &Key, specs: &[KeySpec]) -> bool {
+    specs.iter().any(|s| s.matches(key))
+}
+
+/// 组合是否包含 Meta（Win）键——决定是否需要吞 Win 键事件。
+pub(crate) fn specs_use_meta(specs: &[KeySpec]) -> bool {
+    specs.iter().any(|s| match s {
+        KeySpec::Family(ModFamily::Meta) => true,
+        KeySpec::Exact(Key::MetaLeft | Key::MetaRight) => true,
+        _ => false,
+    })
+}
+
 /// 解析 rdev Key 变体名（大小写不敏感）
 fn parse_key_name(s: &str) -> Result<Key, String> {
     match s.to_ascii_lowercase().as_str() {
@@ -651,5 +693,65 @@ mod tests {
         assert_eq!(modifier_capture_name(&Key::MetaRight, true), "MetaRight");
         assert_eq!(modifier_capture_name(&Key::AltGr, true), "AltGr");
         assert_eq!(modifier_capture_name(&Key::AltGr, false), "Opt");
+    }
+
+    #[test]
+    fn specs_matched_by_pressed_family_and_exact() {
+        let mut pressed = std::collections::HashSet::new();
+        pressed.insert(Key::MetaRight);
+        pressed.insert(Key::AltGr);
+
+        let family = vec![
+            KeySpec::Family(ModFamily::Meta),
+            KeySpec::Family(ModFamily::Alt),
+        ];
+        assert!(specs_matched_by_pressed(&family, &pressed));
+
+        let exact = vec![
+            KeySpec::Exact(Key::MetaRight),
+            KeySpec::Exact(Key::AltGr),
+        ];
+        assert!(specs_matched_by_pressed(&exact, &pressed));
+
+        let wrong_side = vec![
+            KeySpec::Exact(Key::MetaLeft),
+            KeySpec::Exact(Key::AltGr),
+        ];
+        assert!(!specs_matched_by_pressed(&wrong_side, &pressed));
+
+        assert!(!specs_matched_by_pressed(&[], &pressed));
+    }
+
+    #[test]
+    fn key_matches_any_spec_covers_family_and_exact() {
+        let specs = vec![
+            KeySpec::Exact(Key::MetaRight),
+            KeySpec::Family(ModFamily::Alt),
+        ];
+        assert!(key_matches_any_spec(&Key::MetaRight, &specs));
+        assert!(key_matches_any_spec(&Key::AltGr, &specs));
+        assert!(!key_matches_any_spec(&Key::MetaLeft, &specs));
+        assert!(!key_matches_any_spec(&Key::ShiftLeft, &specs));
+    }
+
+    #[test]
+    fn specs_use_meta_detects_family_and_exact() {
+        assert!(specs_use_meta(&[KeySpec::Family(ModFamily::Meta)]));
+        assert!(specs_use_meta(&[KeySpec::Exact(Key::MetaRight)]));
+        assert!(!specs_use_meta(&[KeySpec::Family(ModFamily::Alt)]));
+    }
+
+    #[test]
+    fn modifier_key_classification() {
+        assert!(is_modifier_key(&Key::ControlLeft));
+        assert!(is_modifier_key(&Key::ControlRight));
+        assert!(is_modifier_key(&Key::MetaLeft));
+        assert!(is_modifier_key(&Key::MetaRight));
+        assert!(is_modifier_key(&Key::Alt));
+        assert!(is_modifier_key(&Key::AltGr));
+        assert!(is_modifier_key(&Key::ShiftLeft));
+        assert!(is_modifier_key(&Key::ShiftRight));
+        assert!(!is_modifier_key(&Key::KeyA));
+        assert!(!is_modifier_key(&Key::Escape));
     }
 }
