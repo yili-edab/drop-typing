@@ -8,6 +8,21 @@ use winapi::um::winuser::{CallNextHookEx, GetMessageA, HC_ACTION, WM_KEYDOWN, WM
 
 static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// drop-typing：标记下一次 Win 键「按下」需要被吞掉（属于 drop-typing 组合）。
+static SWALLOW_WIN_DOWN: AtomicBool = AtomicBool::new(false);
+/// drop-typing：标记下一次 Win 键「松开」需要被吞掉（属于 drop-typing 组合）。
+static SWALLOW_WIN_UP: AtomicBool = AtomicBool::new(false);
+
+pub fn set_swallow_win_down(swallow: bool) {
+    SWALLOW_WIN_DOWN.store(swallow, Ordering::SeqCst);
+}
+
+pub fn set_swallow_win_up(swallow: bool) {
+    SWALLOW_WIN_UP.store(swallow, Ordering::SeqCst);
+}
+
 impl From<HookError> for ListenError {
     fn from(error: HookError) -> Self {
         match error {
@@ -48,10 +63,18 @@ unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARA
             }
         }
 
-        // 拦截左右 Win 键：返回非零阻止消息传递到系统，避免弹出开始菜单。
-        // 用户回调已在上方调用——App 仍能收到 MetaLeft/MetaRight 事件。
+        // drop-typing：只有 App 标记为「属于 drop-typing 组合」的 Win 键事件才拦截；
+        // 其它 Win 键事件（开始菜单、Win+E、Win+R 等）放行给系统。
         if is_win {
-            return 1;
+            let down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+            let swallow = if down {
+                SWALLOW_WIN_DOWN.swap(false, Ordering::SeqCst)
+            } else {
+                SWALLOW_WIN_UP.swap(false, Ordering::SeqCst)
+            };
+            if swallow {
+                return 1;
+            }
         }
     }
     CallNextHookEx(HOOK, code, param, lpdata)
