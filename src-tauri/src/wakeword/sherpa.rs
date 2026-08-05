@@ -24,6 +24,14 @@ use super::WakeWord;
 
 // ── 模型路径解析 ──────────────────────────────────────────────────────
 
+/// 在多个基目录下依次查找 `models/builtin/{model_dir}`。
+fn find_in_dirs(model_dir: &str, bases: &[&Path]) -> Option<PathBuf> {
+    bases
+        .iter()
+        .map(|base| base.join("models").join("builtin").join(model_dir))
+        .find(|p| p.is_dir())
+}
+
 /// 解析模型目录路径。
 ///
 /// `resource_dir` 是 Tauri 的资源根目录（`app.path().resource_dir()`）。
@@ -56,6 +64,19 @@ pub(crate) fn resolve_model_dir(model_dir: &str, resource_dir: &Path) -> Option<
     );
     if builtin.is_dir() {
         return Some(builtin);
+    }
+
+    // 回退：可执行文件旁的 models/builtin（Windows 裸 exe / 便携部署）
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            eprintln!(
+                "[drop-typing] 唤醒词：尝试 exe 同目录 '{}'",
+                exe_dir.display(),
+            );
+            if let Some(p) = find_in_dirs(model_dir, &[exe_dir]) {
+                return Some(p);
+            }
+        }
     }
 
     // 回退查找：尝试 CARGO_MANIFEST_DIR 下的 models/builtin
@@ -305,5 +326,23 @@ impl SherpaKws {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     // 关键词音素格式在 keywords.txt 中手动维护，不在此测试
+
+    #[test]
+    fn find_in_dirs_locates_model_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "drop-typing-sherpa-test-{}",
+            std::process::id()
+        ));
+        let model = root.join("models").join("builtin").join("m1");
+        std::fs::create_dir_all(&model).unwrap();
+
+        let result = find_in_dirs("m1", &[&root]);
+        assert_eq!(result.as_deref(), Some(model.as_path()));
+        assert_eq!(find_in_dirs("missing", &[&root]), None);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
