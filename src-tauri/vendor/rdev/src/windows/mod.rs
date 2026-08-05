@@ -13,5 +13,5 @@ pub use crate::windows::display::display_size;
 #[cfg(feature = "unstable_grab")]
 pub use crate::windows::grab::grab;
 pub use crate::windows::keyboard::Keyboard;
-pub use crate::windows::listen::listen;
+pub use crate::windows::listen::{listen, set_swallow_win_down, set_swallow_win_up};
 pub use crate::windows::simulate::simulate;
