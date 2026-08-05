@@ -45,6 +45,10 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri build
 
+      - name: Run Rust unit tests
+        run: cargo test --lib
+        working-directory: src-tauri
+
       - name: Copy wakeword models next to raw exe
         shell: pwsh
         run: Copy-Item -Path src-tauri/models -Destination src-tauri/target/release/models -Recurse -Force

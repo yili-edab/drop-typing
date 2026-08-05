@@ -80,7 +80,7 @@ src-tauri/
 
 模块划分原则：
 
-- **平台相关代码集中在 `hotkey/` 与 `inject/` 的 trait 后面**；Windows 已实现（`hotkey/windows.rs` rdev 低级键盘钩子，默认 Win+Alt 录入 / Ctrl+Alt 修复 / Win+Shift 电脑控制，避开微信语音输入的 Ctrl+Win；`inject/windows.rs` 剪贴板 + 模拟 Ctrl+V），平台依赖在 `Cargo.toml` 的 `[target.'cfg(target_os = "macos")'.dependencies]` 下按 cfg 分支添加
+- **平台相关代码集中在 `hotkey/` 与 `inject/` 的 trait 后面**；Windows 已实现（`hotkey/windows.rs` rdev 低级键盘钩子，默认 Win+Alt 录入 / Ctrl+Alt 修复 / Win+Shift 电脑控制，避开微信语音输入的 Ctrl+Win，支持修饰键家族名或精确左右修饰键名；`inject/windows.rs` 剪贴板 + 模拟 Ctrl+V），平台依赖在 `Cargo.toml` 的 `[target.'cfg(target_os = "macos")'.dependencies]` 下按 cfg 分支添加
 - **ASR 每厂商一个适配器文件**，通过 `protocol` 字段选择；新增厂商时在 `asr/` 下加文件并实现对应 trait
 - **LLM 每种协议一个适配器文件**（`llm/`，M2），同样通过 `protocol` 选择；清洗失败必须降级为原文追加，不能丢内容
 - 暂存条文本状态由 **Rust 侧**持有（`staging.rs`），前端只通过事件订阅渲染
@@ -89,7 +89,7 @@ src-tauri/
 
 - **语言**：代码注释、文档、commit 均使用中文
 - **热键方案固定用 rdev**，不要换成 tauri-plugin-global-shortcut——M1 需要"裸右 ⌘ 单独按下 + 精确 press/release 事件 + 松开时长判定"，插件拿不到单独松开事件、也不支持裸修饰键语义
-- **rdev 是 vendored 补丁**：`Cargo.toml` 中 `[patch.crates-io] rdev = { path = "vendor/rdev" }`，移除了 CGEventTap 后台线程中对 TIS/TSM 输入法 API 的调用（macOS 26 主线程断言导致 EXC_BREAKPOINT）。`cargo update` 时 rdev 被锁定在 0.5.3；上游修复前**不要移除该 patch**
+- **rdev 是 vendored 补丁**：`Cargo.toml` 中 `[patch.crates-io] rdev = { path = "vendor/rdev" }`，移除了 CGEventTap 后台线程中对 TIS/TSM 输入法 API 的调用（macOS 26 主线程断言导致 EXC_BREAKPOINT），并在 Windows 钩子中把 Win 键拦截改为「仅吞属于 drop-typing 组合的 Win 键事件」，保证开始菜单、Win+E、Win+R 等系统快捷键可用。`cargo update` 时 rdev 被锁定在 0.5.3；上游修复前**不要移除该 patch**
 - `tauri.conf.json` 开启了 `macOSPrivateApi`（透明/置顶窗口需要）；CSP 为 `null`；窗口名为 `staging`，权限见 `capabilities/default.json`（仅 `core:default` + `core:event:default`）
 - 提交（短按）流程：暂存条 → 剪贴板 → 模拟 Cmd+V → **恢复原剪贴板** → 清空暂存条。注意剪贴板只按纯文本保存/恢复（M1 已知限制）
 - **确认行为有三种，语义统一**：录入通道短按（macOS 右 ⌘ / Windows Win+Alt）、鼠标左键双击（rdev 监听 `ButtonPress(Left)`，500ms 窗口 `MOUSE_DOUBLE_CLICK_MS`，提交到鼠标所在输入框——双击已把焦点带过去；提交前先模拟一次 → 方向键折叠双击产生的选词，避免替换被选词）。**异常态（黄底红字）下任一确认行为第一次仅消除错误**（`Recording.dismiss_only` / `staging.has_error()` 判定），不提交、不清文本，无内容时顺带隐藏窗口

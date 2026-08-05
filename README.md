@@ -184,6 +184,14 @@ drop-typing/
 
 平台相关代码集中在 `hotkey/` 与 `inject/` 的 trait 后面。Windows 已实现：热键为 rdev 低级键盘钩子（默认 Win+Alt 录入 / Ctrl+Alt 修复 / Win+Shift 电脑控制，已避开微信语音输入的 Ctrl+Win），文字注入为剪贴板 + 模拟 Ctrl+V。
 
+## Windows 注意事项
+
+- 默认快捷键为 Win+Alt（录入）/ Ctrl+Alt（修复）/ Win+Shift（指令）；可在设置页勾选「区分左右」，把快捷键精确绑定到左侧或右侧修饰键（如只认右 Win + 右 Alt）。
+- App 运行期间，Win 单键、Win+E、Win+R 等系统快捷键保持可用；按住 Win+Alt 录音时开始菜单不会弹出（只有「属于 drop-typing 组合」的 Win 键事件会被拦截）。
+- 默认 Win+Shift 与系统截图 Win+Shift+S 存在键位冲突；如需保留系统截图，请把指令通道改为其它组合键。
+- 唤醒词模型随安装包（NSIS/MSI）分发；若直接运行裸 `drop-typing.exe`，需把项目里的 `src-tauri/models` 目录放在 exe 同目录。唤醒词加载或麦克风监听失败会在暂存条显示黄底红字提示。
+- script 动作：macOS 用 zsh（`/bin/zsh -lc`），Windows 用 `cmd.exe /C`；`.bat` / `.cmd` / `.ps1` 文件路径可直接执行。
+
 ## 热键方案决策
 
 **选用 rdev，不用 tauri-plugin-global-shortcut。** 原因：M1 需要"裸右 ⌘ 单独按下 + 精确 press/release 事件 + 松开时时长判定"，global-shortcut 插件面向组合键按下即触发，拿不到单独的松开事件，也不支持裸修饰键语义。rdev 的 `listen`（CGEventTap）能精确给出 `MetaRight` 的按下/松开，代价是需要辅助功能权限（模拟 Cmd+V 本来也需要，无额外成本）。
