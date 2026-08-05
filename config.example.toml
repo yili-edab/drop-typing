@@ -124,8 +124,8 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 #                               KeyA..KeyZ, Num0..Num9, F1..F12,
 #                               Up/Down/Left/Right 等
 #
-# 注意：Windows 端三个功能通道（trigger/repair/command）仅支持修饰键家族名，
-# cancel 支持任意键名。
+# 注意：Windows 端三个功能通道支持修饰键家族名（左右任意）或精确修饰键名
+# （如 MetaRight/AltGr/ControlRight/ShiftRight，区分左右），cancel 支持任意键名。
 # -----------------------------------------------------------
 
 # ── 鼠标侧键（缺省绑定前进→录入、后退→修复）──
@@ -215,7 +215,8 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # # 动作别名（脚本执行）：说“跑备份” → 执行脚本（不模拟按键）。
 # # script 支持两种写法：
 # #   - 已存在的脚本文件路径（绝对路径或 ~ 开头，按 shebang 执行，需 chmod +x）
-# #   - 一行 shell 命令，如 "open https://example.com"（交给 /bin/zsh -lc 执行）
+# #   - 一行 shell 命令，如 "open https://example.com"（macOS 交给 /bin/zsh -lc；
+# #     Windows 交给 cmd.exe /C 执行，如 "start https://example.com"）
 # [[command.action]]
 # phrase = "跑备份"
 # modifiers = []

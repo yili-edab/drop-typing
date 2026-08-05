@@ -12,7 +12,7 @@ const repairNoteEl = document.getElementById("repair-note") as HTMLDivElement;
 const commandEl = document.getElementById("command") as HTMLDivElement;
 const countdownEl = document.getElementById("countdown") as HTMLDivElement;
 
-const PLACEHOLDER = "按住右 ⌘ 说话，短按提交";
+const PLACEHOLDER = "按住热键说话，松开出字（短按提交）";
 const BAR_MAX_HEIGHT = 520;
 
 let currentText = "";

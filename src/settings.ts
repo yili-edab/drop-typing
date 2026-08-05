@@ -1655,7 +1655,7 @@ listen<any>('drop-typing://shortcut-config', (e) => {
   // 平台提示
   platformHintEl.textContent = d.platform === 'macos'
     ? 'macOS：单键快捷键（如 R-CMD、R-OPT 等）'
-    : 'Windows：组合快捷键（如 CMD + ALT 等）';
+    : 'Windows：组合快捷键（如 CMD + ALT 等，可勾选「区分左右」精确到单侧）';
   renderAllShortcut();
 });
 
