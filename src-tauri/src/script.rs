@@ -2,8 +2,10 @@
 //!
 //! 动作别名的 `script` 字段支持两种写法：
 //! - 已存在的脚本文件路径（绝对路径或 `~/` 开头）→ 按 shebang 直接执行，
-//!   工作目录为脚本所在目录；文件需有执行权限（否则明确提示 chmod +x）；
-//! - 一行 shell 命令 → 交给 `/bin/zsh -lc` 执行，工作目录为用户主目录。
+//!   工作目录为脚本所在目录；macOS/Linux 文件需有执行权限（否则提示 chmod +x），
+//!   Windows 上 `.bat/.cmd` 走 cmd.exe、`.ps1` 走 PowerShell；
+//! - 一行 shell 命令 → macOS 交给 `/bin/zsh -lc`，Windows 交给 `cmd.exe /C` 执行，
+//!   工作目录为用户主目录。
 //!
 //! 执行是阻塞式的（调用方应放在后台线程）；不设超时、不展示 stdout，
 //! 失败时返回退出码与截断的 stderr 摘要。
@@ -47,11 +49,17 @@ pub fn run(script: &str) -> Result<(), ScriptError> {
     }
 }
 
+/// 用户主目录（macOS 用 HOME，Windows 用 USERPROFILE）。
+fn home_dir() -> Option<PathBuf> {
+    dirs::home_dir()
+}
+
 /// `~/...` / `~` → 用户主目录绝对路径；其它原样返回。
 fn expand_tilde(raw: &str) -> String {
-    let Some(home) = std::env::var("HOME").ok() else {
+    let Some(home) = home_dir() else {
         return raw.to_string();
     };
+    let home = home.to_string_lossy().into_owned();
     if raw == "~" {
         home
     } else if let Some(rest) = raw.strip_prefix("~/") {
@@ -69,23 +77,59 @@ fn resolve_existing_file(raw: &str) -> Option<PathBuf> {
 }
 
 fn run_file(path: &Path) -> Result<(), ScriptError> {
-    let mut cmd = Command::new(path);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    let mut cmd = match ext.as_deref() {
+        // Windows 批处理必须经 cmd.exe 启动
+        Some("bat" | "cmd") => {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(path);
+            c
+        }
+        // PowerShell 脚本
+        Some("ps1") => {
+            let mut c = Command::new("powershell");
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(path);
+            c
+        }
+        // 可执行文件 / shebang 脚本（macOS/Linux）
+        _ => Command::new(path),
+    };
     if let Some(parent) = path.parent() {
         cmd.current_dir(parent);
     }
     let output = cmd.output().map_err(|e| {
-        ScriptError::new(format!(
-            "无法执行脚本 {}：{e}（若是缺少执行权限，请先运行 chmod +x 后重试）",
-            path.display()
-        ))
+        let hint = if cfg!(windows) {
+            "请确认文件关联，或改用 .bat/.cmd/.ps1/.exe".to_string()
+        } else {
+            "若是缺少执行权限，请先运行 chmod +x 后重试".to_string()
+        };
+        ScriptError::new(format!("无法执行脚本 {}：{e}（{hint}）", path.display()))
     })?;
     finish(output)
 }
 
+#[cfg(target_os = "windows")]
 fn run_shell_line(line: &str) -> Result<(), ScriptError> {
-    let cwd = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let cwd = home_dir().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+    let output = Command::new("cmd")
+        .args(["/C", line])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| ScriptError::new(format!("无法启动 cmd.exe：{e}")))?;
+    finish(output)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_shell_line(line: &str) -> Result<(), ScriptError> {
+    let cwd = home_dir().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
     let output = Command::new("/bin/zsh")
         .args(["-lc", line])
         .current_dir(cwd)
@@ -128,22 +172,12 @@ fn truncate(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
-    /// 在临时目录写一个可执行脚本，返回其绝对路径。
-    fn write_exec_script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).unwrap();
-        path
-    }
-
     #[test]
     fn shell_line_success() {
         assert!(run("echo drop-typing-ok").is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_line_nonzero_exit_returns_error_with_stderr() {
         let err = run("echo 'boom' >&2; exit 7").unwrap_err();
@@ -152,6 +186,7 @@ mod tests {
         assert!(msg.contains("boom"), "应包含 stderr 摘要：{msg}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_line_unknown_command_reports_not_found() {
         let err = run("drop-typing-no-such-command-xyz").unwrap_err();
@@ -162,6 +197,37 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn shell_line_nonzero_exit_via_cmd() {
+        let err = run("exit 7").unwrap_err();
+        assert!(err.to_string().contains("退出码 7"), "{err}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_line_unknown_command_via_cmd() {
+        let err = run("drop-typing-no-such-command-xyz").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not recognized") || msg.contains("不是内部或外部命令"),
+            "应提示命令不存在：{msg}"
+        );
+    }
+
+    /// 在临时目录写一个可执行脚本，返回其绝对路径（仅 unix：需要 chmod）。
+    #[cfg(unix)]
+    fn write_exec_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
     #[test]
     fn file_path_executes_via_shebang() {
         let dir = std::env::temp_dir().join(format!(
@@ -174,6 +240,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn file_path_nonzero_exit_reports_code_and_stderr() {
         let dir = std::env::temp_dir().join(format!(
@@ -191,12 +258,14 @@ mod tests {
 
     #[test]
     fn tilde_expansion_uses_home() {
-        let home = std::env::var("HOME").expect("测试环境应有 HOME");
+        let home = dirs::home_dir().expect("测试环境应有家目录");
+        let home = home.to_string_lossy();
         assert_eq!(expand_tilde("~"), home);
         assert_eq!(expand_tilde("~/backup.sh"), format!("{home}/backup.sh"));
         assert_eq!(expand_tilde("/abs/path.sh"), "/abs/path.sh");
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_file_value_falls_through_to_shell() {
         // 不存在的 ~/ 路径不是文件 → 落到 zsh 命令行分支并报“无此文件”
@@ -205,6 +274,18 @@ mod tests {
         assert!(
             msg.contains("no such file") || msg.contains("No such file") || msg.contains("没有那个文件"),
             "应提示无此文件：{msg}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn non_file_value_falls_through_to_cmd() {
+        // 不存在的绝对路径不是文件 → 落到 cmd.exe 命令行分支并报“无法识别”
+        let err = run("C:\\drop-typing-no-such-dir-xyz\\foo.exe").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not recognized") || msg.contains("不是内部或外部命令"),
+            "应提示命令不存在：{msg}"
         );
     }
 
