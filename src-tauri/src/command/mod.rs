@@ -333,6 +333,29 @@ pub fn parse(text: &str, lexicon: &Lexicon) -> Option<ParsedCommand> {
     try_parse(&normalized, false, lexicon).or_else(|| try_parse(&normalized, true, lexicon))
 }
 
+/// 内置动作别名（短语 + 解析结果），供唯一性校验 / 闪电词表 / 设置页使用。
+pub fn builtin_action_aliases() -> Vec<(String, ParsedCommand)> {
+    let lex = Lexicon::build(None);
+    lex.main
+        .iter()
+        .filter_map(|(phrase, entry)| match entry {
+            LexOwned::Action(m, k, s) => {
+                let cmd = match s {
+                    Some(script) if !script.trim().is_empty() => {
+                        ParsedCommand::Script(script.clone())
+                    }
+                    _ => ParsedCommand::Combo(KeyCombo {
+                        modifiers: m.clone(),
+                        key: k.clone(),
+                    }),
+                };
+                Some((phrase.clone(), cmd))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,5 +555,24 @@ mod tests {
             super::parse("复制", &lex).map(|c| c.display()).as_deref(),
             Some("CMD+C")
         );
+    }
+
+    #[test]
+    fn builtin_action_aliases_are_complete() {
+        let aliases = super::builtin_action_aliases();
+        assert_eq!(aliases.len(), 15);
+        for p in [
+            "复制", "拷贝", "copy", "粘贴", "黏贴", "paste", "剪切", "cut",
+            "撤销", "undo", "重做", "redo", "全选", "保存", "save",
+        ] {
+            assert!(
+                aliases.iter().any(|(phrase, _)| phrase == p),
+                "缺少内置动作别名：{p}"
+            );
+        }
+        let (_, cmd) = aliases.iter().find(|(p, _)| p == "复制").unwrap();
+        assert_eq!(cmd.display(), "CMD+C");
+        let (_, cmd) = aliases.iter().find(|(p, _)| p == "重做").unwrap();
+        assert_eq!(cmd.display(), "SHIFT+CMD+Z");
     }
 }
