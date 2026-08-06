@@ -54,34 +54,49 @@ fn from_config_action(a: &crate::config::CommandActionEntry) -> ParsedCommand {
     }
 }
 
+/// 按短语长度自适应关键词阈值：短语越短、声学概率越低，
+/// 使用比统一阈值更低的触发阈值，避免短别名（如「复制」）漏触发。
+fn per_keyword_threshold(phrase: &str, base: f32) -> f32 {
+    let chars = phrase.chars().filter(|c| !c.is_whitespace()).count();
+    let adjusted = match chars {
+        0..=2 => base - 0.25,
+        3 => base - 0.15,
+        _ => base,
+    };
+    let rounded = (adjusted * 100.0).round() / 100.0;
+    rounded.clamp(0.3, 1.0)
+}
+
 /// 合并内置 + 用户动作别名：用户条目覆盖同名内置，去重。
+/// 顺序：用户自定义在前，内置在后。
 pub fn all_aliases(cfg: &CommandConfig) -> Vec<AliasEntry> {
-    let mut map: HashMap<String, AliasEntry> = HashMap::new();
-    for (phrase, cmd) in command::builtin_action_aliases() {
-        map.insert(
-            normalize_phrase(&phrase),
-            AliasEntry {
-                phrase,
-                command: cmd,
-                source: AliasSource::Builtin,
-            },
-        );
-    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<AliasEntry> = Vec::new();
     for a in &cfg.action {
         let p = a.phrase.trim();
         if p.is_empty() {
             continue;
         }
-        map.insert(
-            normalize_phrase(p),
-            AliasEntry {
+        let key = normalize_phrase(p);
+        if seen.insert(key) {
+            out.push(AliasEntry {
                 phrase: p.to_string(),
                 command: from_config_action(a),
                 source: AliasSource::User,
-            },
-        );
+            });
+        }
     }
-    map.into_values().collect()
+    for (phrase, cmd) in command::builtin_action_aliases() {
+        let key = normalize_phrase(&phrase);
+        if seen.insert(key) {
+            out.push(AliasEntry {
+                phrase,
+                command: cmd,
+                source: AliasSource::Builtin,
+            });
+        }
+    }
+    out
 }
 
 /// 过滤掉用户在 `lightning_disabled` 中关闭的别名。
@@ -126,7 +141,7 @@ impl LightningSpotter {
         let mut lines = Vec::with_capacity(aliases.len());
         for a in &aliases {
             let base = t2t.convert(&a.phrase, &a.phrase)?;
-            lines.push(keyword_line(&base, threshold)?);
+            lines.push(keyword_line(&base, per_keyword_threshold(&a.phrase, threshold))?);
         }
         let keyword_map: Vec<(String, WakeWord)> = aliases
             .iter()
@@ -264,7 +279,9 @@ pub fn settings_view(cfg: &crate::config::Config, resource_dir: &Path) -> serde_
             let token_line = t2t
                 .as_ref()
                 .and_then(|t| t.convert(&a.phrase, &a.phrase).ok())
-                .and_then(|l| keyword_line(&l, threshold).ok());
+                .and_then(|l| {
+                    keyword_line(&l, per_keyword_threshold(&a.phrase, threshold)).ok()
+                });
             serde_json::json!({
                 "phrase": a.phrase,
                 "display": a.command.display(),
@@ -303,6 +320,35 @@ mod tests {
         assert_eq!(copy.command.display(), "V");
         assert_eq!(copy.source, AliasSource::User);
         assert!(aliases.iter().any(|a| a.source == AliasSource::Builtin));
+    }
+
+    #[test]
+    fn all_aliases_user_first_then_builtin() {
+        let mut cfg = CommandConfig::default();
+        cfg.action.push(CommandActionEntry {
+            phrase: "打开微信".to_string(),
+            modifiers: vec![],
+            key: "M".to_string(),
+            script: None,
+        });
+        let aliases = all_aliases(&cfg);
+        let first_user = aliases.iter().position(|a| a.source == AliasSource::User);
+        let first_builtin = aliases.iter().position(|a| a.source == AliasSource::Builtin);
+        assert!(first_user.is_some(), "应包含用户自定义别名");
+        assert!(first_builtin.is_some(), "应包含内置别名");
+        assert!(
+            first_user.unwrap() < first_builtin.unwrap(),
+            "用户自定义应排在内置之前"
+        );
+    }
+
+    #[test]
+    fn per_keyword_threshold_short_phrases_lower() {
+        assert_eq!(per_keyword_threshold("复制", 0.7), 0.45);
+        assert_eq!(per_keyword_threshold("打开微信", 0.7), 0.7);
+        assert_eq!(per_keyword_threshold("复制吧", 0.7), 0.55);
+        // 下限 0.3
+        assert_eq!(per_keyword_threshold("复制", 0.4), 0.3);
     }
 
     #[test]

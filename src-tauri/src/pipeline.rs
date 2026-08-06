@@ -1881,6 +1881,7 @@ fn handle_lightning_hit(
     staging.clear_command();
     staging.clear_error();
     let display = parsed.display();
+    eprintln!("[drop-typing] ⚡ 闪电指令命中：{display}");
     staging.show_command(&display, 0);
     staging.committed();
 
@@ -1928,6 +1929,10 @@ fn run_command(
     lexicon: &command::Lexicon,
 ) {
     staging.set_status("");
+    eprintln!(
+        "[drop-typing] 指令走文字解析（L2，倒计时 {}ms）：{text}",
+        countdown.as_millis()
+    );
     let parsed = match command::parse(text, lexicon) {
         Some(parsed) => parsed,
         None => {

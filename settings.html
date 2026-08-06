@@ -146,17 +146,19 @@
 
         <!-- ── 语音控制（Command） ── -->
         <section id="panel-voice-command" class="panel">
-          <label>闪电指令</label>
-          <p class="help">按住指令键说出动作别名，本地声学识别命中即执行，不经过云端 ASR、无确认倒计时；未命中时仍走文字识别 + 倒计时。仅动作别名可注册。</p>
-          <div class="field-row">
-            <sl-input id="lightning-threshold" type="number" min="0.3" max="1.0" step="0.05"
-                      size="small" placeholder="默认 0.7"></sl-input>
-            <p class="help">识别阈值（0.3~1.0）：越高越严格、误触越少。</p>
-          </div>
-          <div id="lightning-list">
-            <!-- JS 动态填充 -->
-          </div>
-          <sl-button id="btn-lightning-tokens" size="small" variant="neutral">查看 Token</sl-button>
+          <sl-details id="lightning-details" class="lightning-details" open>
+            <span slot="summary">闪电指令</span>
+            <p class="help">按住指令键说出动作别名，本地声学识别命中即执行，不经过云端 ASR、无确认倒计时；未命中时仍走文字识别 + 倒计时。仅动作别名可注册。</p>
+            <div class="field-row">
+              <sl-input id="lightning-threshold" type="number" min="0.3" max="1.0" step="0.05"
+                        size="small" placeholder="默认 0.7"></sl-input>
+              <p class="help">识别阈值（0.3~1.0）：越高越严格、误触越少；短语越短自动用更低阈值。</p>
+            </div>
+            <div id="lightning-list">
+              <!-- JS 动态填充 -->
+            </div>
+            <sl-button id="btn-lightning-tokens" size="small" variant="neutral">查看 Token</sl-button>
+          </sl-details>
 
           <label>指令确认倒计时</label>
           <div class="field-row">

@@ -1023,7 +1023,17 @@ function renderLightningList() {
     lightningList.appendChild(empty);
     return;
   }
-  for (const item of lightningItems) {
+  const userItems = lightningItems.filter((it) => !it.builtin);
+  const builtinItems = lightningItems.filter((it) => it.builtin);
+  const groups: [string, LightningItem[]][] = [];
+  if (userItems.length > 0) groups.push(['自定义', userItems]);
+  if (builtinItems.length > 0) groups.push(['内置', builtinItems]);
+  for (const [title, items] of groups) {
+    const head = document.createElement('div');
+    head.className = 'lightning-group-title';
+    head.textContent = title;
+    lightningList.appendChild(head);
+    for (const item of items) {
     const enabled = !isLightningDisabled(item.phrase);
     const row = document.createElement('div');
     row.className = 'lightning-row';
@@ -1050,6 +1060,7 @@ function renderLightningList() {
     sw.addEventListener('sl-change', () => setLightningDisabled(item.phrase, !sw.checked));
     row.append(phrase, arrow, display, badge, status, sw);
     lightningList.appendChild(row);
+    }
   }
 }
 
