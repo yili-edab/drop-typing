@@ -94,6 +94,22 @@ pub struct CommandConfig {
     /// 字母谐音（ASR 把英文字母识别成汉字时的映射）
     #[serde(default)]
     pub homophone: Vec<CommandHomophoneEntry>,
+    /// 闪电指令统一触发阈值（默认 0.7；仅动作别名生效）
+    #[serde(default)]
+    pub lightning_threshold: Option<f32>,
+    /// 用户关闭闪电的短语（内置 + 用户动作别名通用；只影响闪电，不影响文字解析）
+    #[serde(default)]
+    pub lightning_disabled: Vec<String>,
+}
+
+impl CommandConfig {
+    /// 闪电指令有效阈值（未配置或越界时回退默认 0.7）
+    pub fn effective_lightning_threshold(&self) -> f32 {
+        match self.lightning_threshold {
+            Some(v) if v > 0.0 && v <= 1.0 => v,
+            _ => 0.7,
+        }
+    }
 }
 
 // ── 唤醒词配置类型 ──────────────────────────────────────────────────
@@ -640,6 +656,61 @@ pub fn parse_config_file(raw: &str) -> Result<Config, String> {
     toml::from_str::<Config>(raw).map_err(|e| format_toml_error(raw, &e))
 }
 
+/// 动作别名短语归一化：去首尾空格、全角转半角、ASCII 小写。
+fn normalize_alias_phrase(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.trim().chars() {
+        let c = if ('\u{FF01}'..='\u{FF5E}').contains(&c) {
+            char::from_u32(c as u32 - 0xFEE0).unwrap_or(c)
+        } else {
+            c
+        };
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
+/// 校验用户动作别名唯一性（仅动作别名命名空间）：
+/// 1. 不能与内置动作别名重复；2. 用户动作别名之间不能重复。
+pub fn validate_action_uniqueness(cfg: &CommandConfig) -> Result<(), String> {
+    use std::collections::HashMap;
+    let mut seen: HashMap<String, String> = HashMap::new();
+    for (phrase, _) in crate::command::builtin_action_aliases() {
+        seen.insert(normalize_alias_phrase(&phrase), phrase);
+    }
+    for a in &cfg.action {
+        let p = a.phrase.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let key = normalize_alias_phrase(p);
+        if let Some(existing) = seen.get(&key) {
+            return Err(format!(
+                "动作别名「{}」与「{}」重复：指令名字需要唯一",
+                a.phrase, existing
+            ));
+        }
+        seen.insert(key, a.phrase.clone());
+    }
+    Ok(())
+}
+
+/// 保存时清理 lightning_disabled 中已不存在的短语（改名 / 删除后残留）。
+pub fn prune_lightning_disabled(cfg: &mut CommandConfig) {
+    use std::collections::HashSet;
+    let mut valid: HashSet<String> = HashSet::new();
+    for (phrase, _) in crate::command::builtin_action_aliases() {
+        valid.insert(normalize_alias_phrase(&phrase));
+    }
+    for a in &cfg.action {
+        if !a.phrase.trim().is_empty() {
+            valid.insert(normalize_alias_phrase(&a.phrase));
+        }
+    }
+    cfg.lightning_disabled
+        .retain(|p| valid.contains(&normalize_alias_phrase(p)));
+}
+
 /// 将 toml 错误转换为带行列号的文案。
 pub fn format_toml_error(raw: &str, e: &toml::de::Error) -> String {
     if let Some(span) = e.span() {
@@ -729,5 +800,105 @@ mod tests {
         let mut new = Config::default();
         new.llm.api_key = Some("sk-x".to_string());
         assert!(!needs_restart(&old, &new));
+    }
+
+    #[test]
+    fn command_config_lightning_defaults() {
+        let cfg = CommandConfig::default();
+        assert_eq!(cfg.lightning_threshold, None);
+        assert!(cfg.lightning_disabled.is_empty());
+        assert_eq!(cfg.effective_lightning_threshold(), 0.7);
+    }
+
+    #[test]
+    fn command_config_lightning_roundtrip() {
+        let raw = "[command]\nlightning_threshold = 0.6\nlightning_disabled = [\"复制\"]\n";
+        let cfg = parse_config_file(raw).expect("合法 TOML 应解析成功");
+        assert_eq!(cfg.command.lightning_threshold, Some(0.6));
+        assert_eq!(cfg.command.effective_lightning_threshold(), 0.6);
+        assert_eq!(cfg.command.lightning_disabled, vec!["复制".to_string()]);
+    }
+
+    #[test]
+    fn lightning_threshold_out_of_range_falls_back() {
+        let mut cfg = CommandConfig::default();
+        cfg.lightning_threshold = Some(1.5);
+        assert_eq!(cfg.effective_lightning_threshold(), 0.7);
+        cfg.lightning_threshold = Some(-0.1);
+        assert_eq!(cfg.effective_lightning_threshold(), 0.7);
+    }
+
+    #[test]
+    fn validate_action_uniqueness_rejects_builtin_collision() {
+        let mut cfg = CommandConfig::default();
+        cfg.action.push(CommandActionEntry {
+            phrase: "复制".to_string(),
+            modifiers: vec![],
+            key: "C".to_string(),
+            script: None,
+        });
+        let err = validate_action_uniqueness(&cfg).unwrap_err();
+        assert!(err.contains("复制"), "应指向内置别名：{err}");
+
+        let mut cfg = CommandConfig::default();
+        cfg.action.push(CommandActionEntry {
+            phrase: "Copy".to_string(),
+            modifiers: vec![],
+            key: "C".to_string(),
+            script: None,
+        });
+        let err = validate_action_uniqueness(&cfg).unwrap_err();
+        assert!(err.contains("copy"), "大小写归一化后应判重：{err}");
+    }
+
+    #[test]
+    fn validate_action_uniqueness_rejects_user_duplicate() {
+        let mut cfg = CommandConfig::default();
+        cfg.action.push(CommandActionEntry {
+            phrase: "截图".to_string(),
+            modifiers: vec![],
+            key: "C".to_string(),
+            script: None,
+        });
+        cfg.action.push(CommandActionEntry {
+            phrase: "截图 ".to_string(),
+            modifiers: vec![],
+            key: "V".to_string(),
+            script: None,
+        });
+        let err = validate_action_uniqueness(&cfg).unwrap_err();
+        assert!(err.contains("重复"));
+    }
+
+    #[test]
+    fn validate_action_uniqueness_accepts_unique_and_ignores_empty() {
+        let mut cfg = CommandConfig::default();
+        cfg.action.push(CommandActionEntry {
+            phrase: "截图".to_string(),
+            modifiers: vec![],
+            key: "C".to_string(),
+            script: None,
+        });
+        cfg.action.push(CommandActionEntry {
+            phrase: "跑备份".to_string(),
+            modifiers: vec![],
+            key: "C".to_string(),
+            script: Some("backup.sh".to_string()),
+        });
+        cfg.action.push(CommandActionEntry {
+            phrase: "  ".to_string(),
+            modifiers: vec![],
+            key: "C".to_string(),
+            script: None,
+        });
+        assert!(validate_action_uniqueness(&cfg).is_ok());
+    }
+
+    #[test]
+    fn prune_lightning_disabled_removes_stale_entries() {
+        let mut cfg = CommandConfig::default();
+        cfg.lightning_disabled = vec!["复制".to_string(), "已删除的别名".to_string()];
+        prune_lightning_disabled(&mut cfg);
+        assert_eq!(cfg.lightning_disabled, vec!["复制".to_string()]);
     }
 }
