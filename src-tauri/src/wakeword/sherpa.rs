@@ -228,19 +228,14 @@ impl SherpaKws {
         })
     }
 
-    /// 处理一帧音频（f32, 16kHz, 单声道）。
-    ///
-    /// 返回 `Some(WakeWord)` 如果检测到唤醒词，否则 `None`。
-    /// 检测到后会自动重置 stream 以避免重复触发。
-    pub fn process_frame(
+    /// 解码一帧音频并返回命中的原始 keyword（trim + 小写）；
+    /// 命中后自动重置 stream。
+    pub fn process_frame_label(
         &self,
         stream: &mut sherpa_onnx::OnlineStream,
         frame: &[f32],
-    ) -> Option<WakeWord> {
-        // 喂音频
+    ) -> Option<String> {
         stream.accept_waveform(16_000, frame);
-
-        // 增量解码（带迭代上限以防死循环）
         let mut decode_iters: u32 = 0;
         while self.spotter.is_ready(stream) {
             self.spotter.decode(stream);
@@ -254,63 +249,70 @@ impl SherpaKws {
                 return None;
             }
         }
-
-        // 检查结果
         let result: Option<KeywordResult> = self.spotter.get_result(stream);
-
         match result {
             Some(r) if !r.keyword.is_empty() => {
-                // 在 keyword_map 中查找匹配。
-                //
-                // 匹配策略（按优先级）：
-                // 1. 精确匹配（trim + 大小写归一化后相等）
-                // 2. 前向包含：detected 包含 normalized（如 sherpa-onnx 返回
-                //    "DT打" 带多余空格，配置里是 "DT打"）
-                // 3. 后向包含：normalized 包含 detected（仅在前两项都未命中时回退，
-                //    用于兼容旧逻辑，但不作为首选以避免 "杨力" 误匹配到 "杨力确认"）
                 let detected = r.keyword.trim().to_lowercase();
-
-                let find_exact = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
-                    map.iter()
-                        .find(|(k, _)| k.trim().to_lowercase() == detected)
-                        .map(|(_, w)| w.clone())
-                };
-
-                let find_contains = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
-                    map.iter()
-                        .find(|(k, _)| {
-                            let normalized = k.trim().to_lowercase();
-                            detected.contains(&normalized) || normalized.contains(&detected)
-                        })
-                        .map(|(_, w)| w.clone())
-                };
-
-                let wake_word = find_exact(&self.keyword_map)
-                    .or_else(|| find_contains(&self.keyword_map));
-
-                match &wake_word {
-                    Some(ww) => {
-                        eprintln!(
-                            "[drop-typing] 🎤 唤醒词匹配成功：keyword='{}' action='{}'",
-                            ww.text, ww.action,
-                        );
-                    }
-                    None => {
-                        let keys: Vec<&str> = self.keyword_map.keys().map(|s| s.as_str()).collect();
-                        eprintln!(
-                            "[drop-typing] ⚠ 唤醒词匹配失败！r.keyword='{}'，keyword_map keys={:?}",
-                            r.keyword, keys,
-                        );
-                    }
-                }
-
-                // 重置 stream，避免连续触发同一唤醒词
                 self.spotter.reset(stream);
-
-                wake_word
+                Some(detected)
             }
             _ => None,
         }
+    }
+
+    /// 处理一帧音频（f32, 16kHz, 单声道）。
+    ///
+    /// 返回 `Some(WakeWord)` 如果检测到唤醒词，否则 `None`。
+    /// 检测到后会自动重置 stream 以避免重复触发。
+    pub fn process_frame(
+        &self,
+        stream: &mut sherpa_onnx::OnlineStream,
+        frame: &[f32],
+    ) -> Option<WakeWord> {
+        let detected = self.process_frame_label(stream, frame)?;
+        // 在 keyword_map 中查找匹配。
+        //
+        // 匹配策略（按优先级）：
+        // 1. 精确匹配（trim + 大小写归一化后相等）
+        // 2. 前向包含：detected 包含 normalized（如 sherpa-onnx 返回
+        //    "DT打" 带多余空格，配置里是 "DT打"）
+        // 3. 后向包含：normalized 包含 detected（仅在前两项都未命中时回退，
+        //    用于兼容旧逻辑，但不作为首选以避免 "杨力" 误匹配到 "杨力确认"）
+
+        let find_exact = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
+            map.iter()
+                .find(|(k, _)| k.trim().to_lowercase() == detected)
+                .map(|(_, w)| w.clone())
+        };
+
+        let find_contains = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
+            map.iter()
+                .find(|(k, _)| {
+                    let normalized = k.trim().to_lowercase();
+                    detected.contains(&normalized) || normalized.contains(&detected)
+                })
+                .map(|(_, w)| w.clone())
+        };
+
+        let wake_word = find_exact(&self.keyword_map)
+            .or_else(|| find_contains(&self.keyword_map));
+
+        match &wake_word {
+            Some(ww) => {
+                eprintln!(
+                    "[drop-typing] 🎤 唤醒词匹配成功：keyword='{}' action='{}'",
+                    ww.text, ww.action,
+                );
+            }
+            None => {
+                let keys: Vec<&str> = self.keyword_map.keys().map(|s| s.as_str()).collect();
+                eprintln!(
+                    "[drop-typing] ⚠ 唤醒词匹配失败！r.keyword='{}'，keyword_map keys={:?}",
+                    detected, keys,
+                );
+            }
+        }
+        wake_word
     }
 
     /// 重置 stream 状态（外部调用，如检测后清除状态）。

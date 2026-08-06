@@ -5,10 +5,14 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::command::{self, KeyCombo, ParsedCommand};
 use crate::config::CommandConfig;
+use crate::wakeword::sherpa::SherpaKws;
 use crate::wakeword::text2token::Text2Token;
+use crate::wakeword::WakeWord;
 
 /// 动作别名来源标记（设置页展示用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +107,143 @@ fn keyword_line(line: &str, threshold: f32) -> anyhow::Result<String> {
             &line[i + 1..]
         )),
         None => anyhow::bail!("text2token 输出缺少 @label：{line}"),
+    }
+}
+
+/// 闪电引擎：sherpa KWS + 短语 → 指令映射。
+pub struct LightningSpotter {
+    kws: SherpaKws,
+    map: HashMap<String, ParsedCommand>,
+}
+
+impl LightningSpotter {
+    /// 从模型目录 + 指令配置加载；任一条转换失败会让整体加载失败
+    /// （调用方降级为仅 L2）。
+    pub fn load(model_dir: &Path, cfg: &CommandConfig) -> anyhow::Result<Self> {
+        let t2t = Text2Token::load(model_dir)?;
+        let aliases = effective_aliases(cfg);
+        let threshold = cfg.effective_lightning_threshold();
+        let mut lines = Vec::with_capacity(aliases.len());
+        for a in &aliases {
+            let base = t2t.convert(&a.phrase, &a.phrase)?;
+            lines.push(keyword_line(&base, threshold)?);
+        }
+        let keyword_map: Vec<(String, WakeWord)> = aliases
+            .iter()
+            .map(|a| {
+                (
+                    a.phrase.clone(),
+                    WakeWord {
+                        text: a.phrase.clone(),
+                        action: "command".to_string(),
+                    },
+                )
+            })
+            .collect();
+        let buf = lines.join("\n");
+        // 行内已带 # 阈值；全局阈值传 1.0 作兜底（未带 # 的关键词永不触发）
+        let kws = SherpaKws::load_with_buf(model_dir, &keyword_map, &buf, 1.0, 1.0)?;
+        let map = aliases
+            .iter()
+            .map(|a| (normalize_phrase(&a.phrase), a.command.clone()))
+            .collect();
+        eprintln!(
+            "[drop-typing] 闪电指令：已加载 {} 个关键词（阈值 {threshold:.2}）",
+            aliases.len()
+        );
+        Ok(Self { kws, map })
+    }
+
+    pub fn create_stream(&self) -> sherpa_onnx::OnlineStream {
+        self.kws.create_stream()
+    }
+
+    pub fn reset(&self, stream: &mut sherpa_onnx::OnlineStream) {
+        self.kws.reset(stream);
+    }
+
+    /// 处理一帧音频，命中返回对应指令。
+    pub fn process_frame(
+        &self,
+        stream: &mut sherpa_onnx::OnlineStream,
+        frame: &[f32],
+    ) -> Option<ParsedCommand> {
+        let label = self.kws.process_frame_label(stream, frame)?;
+        self.map
+            .get(&label)
+            .cloned()
+            .or_else(|| {
+                self.map
+                    .iter()
+                    .find(|(k, _)| label.contains(k.as_str()) || k.contains(&label))
+                    .map(|(_, v)| v.clone())
+            })
+    }
+}
+
+/// 指令录音期间把 PCM 喂给闪电引擎的匹配器（线程安全，一次录音一个实例）。
+pub struct LightningMatcher {
+    spotter: Arc<LightningSpotter>,
+    stream: Mutex<sherpa_onnx::OnlineStream>,
+    fired: AtomicBool,
+}
+
+impl LightningMatcher {
+    pub fn new(spotter: Arc<LightningSpotter>) -> Self {
+        Self {
+            stream: Mutex::new(spotter.create_stream()),
+            spotter,
+            fired: AtomicBool::new(false),
+        }
+    }
+
+    /// 喂入一段 s16le 单声道 16kHz PCM；命中返回指令（一次录音最多一次）。
+    pub fn feed(&self, pcm: &[u8]) -> Option<ParsedCommand> {
+        if self.fired.load(Ordering::SeqCst) {
+            return None;
+        }
+        let mut frames = Vec::with_capacity(pcm.len() / 2);
+        for pair in pcm.chunks_exact(2) {
+            let v = i16::from_le_bytes([pair[0], pair[1]]);
+            frames.push(v as f32 / i16::MAX as f32);
+        }
+        let hit = {
+            let mut stream = self.stream.lock().unwrap();
+            self.spotter.process_frame(&mut stream, &frames)
+        };
+        if let Some(cmd) = hit {
+            self.fired.store(true, Ordering::SeqCst);
+            Some(cmd)
+        } else {
+            None
+        }
+    }
+}
+
+/// 音频匹配抽象：pipeline 转发器通过它喂 PCM，测试可用假实现。
+pub trait AudioMatcher: Send + Sync {
+    fn feed(&self, pcm: &[u8]) -> Option<ParsedCommand>;
+}
+
+impl AudioMatcher for LightningMatcher {
+    fn feed(&self, pcm: &[u8]) -> Option<ParsedCommand> {
+        LightningMatcher::feed(self, pcm)
+    }
+}
+
+/// 从完整配置构建闪电引擎；模型缺失 / 加载失败返回 None（调用方降级为仅 L2）。
+pub fn from_config(
+    cfg: &crate::config::Config,
+    resource_dir: &Path,
+) -> Option<Arc<LightningSpotter>> {
+    let model_dir =
+        crate::wakeword::sherpa::resolve_model_dir(&cfg.wakeword.model_dir, resource_dir)?;
+    match LightningSpotter::load(&model_dir, &cfg.command) {
+        Ok(s) => Some(Arc::new(s)),
+        Err(e) => {
+            eprintln!("[drop-typing] 闪电指令加载失败：{e:#}（降级为仅文字识别）");
+            None
+        }
     }
 }
 
