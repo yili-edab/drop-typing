@@ -51,7 +51,9 @@ jobs:
 
       - name: Copy wakeword models next to raw exe
         shell: pwsh
-        run: Copy-Item -Path src-tauri/models -Destination src-tauri/target/release/models -Recurse -Force
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/target/release/models | Out-Null
+          Copy-Item -Path src-tauri/models/* -Destination src-tauri/target/release/models -Recurse -Force
 
       - name: Verify NSIS bundle exists
         shell: pwsh
@@ -69,6 +71,7 @@ jobs:
             src-tauri/target/release/models/**/*.onnx
             src-tauri/target/release/models/**/*.txt
             src-tauri/target/release/models/**/*.json
+            src-tauri/target/release/models/**/*.phone
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -81,6 +84,7 @@ jobs:
             src-tauri/target/release/models/**/*.onnx
             src-tauri/target/release/models/**/*.txt
             src-tauri/target/release/models/**/*.json
+            src-tauri/target/release/models/**/*.phone
           draft: true
           generate_release_notes: true
         env:
