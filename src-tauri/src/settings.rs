@@ -928,17 +928,27 @@ pub fn register_settings_handlers(app: &AppHandle) {
         }
     });
 
-    // ── 语音控制（Command 词表 + 倒计时）：获取
+    // ── 语音控制（Command 词表 + 倒计时 + 闪电指令）：获取
     let ah = app.clone();
     app.listen("drop-typing://get-command-config", move |_| {
         eprintln!("[drop-typing] get-command-config received");
         let (cfg, _) = Config::load_lenient();
         let cmd = serde_json::to_value(&cfg.command).unwrap_or_default();
+        let resource_dir = ah.path().resource_dir().unwrap_or_default();
+        let builtin_actions: Vec<serde_json::Value> = crate::command::builtin_action_aliases()
+            .iter()
+            .map(|(phrase, parsed)| {
+                serde_json::json!({ "phrase": phrase, "display": parsed.display() })
+            })
+            .collect();
         let _ = ah.emit(
             "drop-typing://command-config",
             serde_json::json!({
                 "config": cmd,
                 "effective_command_countdown_ms": cfg.effective_command_countdown_ms(),
+                "lightning_threshold": cfg.command.effective_lightning_threshold(),
+                "builtin_actions": builtin_actions,
+                "lightning": crate::lightning::settings_view(&cfg, &resource_dir),
             }),
         );
     });
@@ -950,7 +960,15 @@ pub fn register_settings_handlers(app: &AppHandle) {
         let payload: serde_json::Value =
             serde_json::from_str(ev.payload()).unwrap_or_default();
         match serde_json::from_value::<CommandConfig>(payload) {
-            Ok(cmd) => {
+            Ok(mut cmd) => {
+                if let Err(e) = crate::config::validate_action_uniqueness(&cmd) {
+                    let _ = ah.emit(
+                        "drop-typing://command-config-saved",
+                        serde_json::json!({ "success": false, "error": e }),
+                    );
+                    return;
+                }
+                crate::config::prune_lightning_disabled(&mut cmd);
                 let mut cfg = Config::load_lenient().0;
                 cfg.command = cmd;
                 match cfg.save() {
@@ -1017,6 +1035,13 @@ pub fn register_settings_handlers(app: &AppHandle) {
                 );
             }
             Ok(new_cfg) => {
+                if let Err(e) = crate::config::validate_action_uniqueness(&new_cfg.command) {
+                    let _ = ah.emit(
+                        "drop-typing://config-file-saved",
+                        serde_json::json!({ "success": false, "error": format!("指令名字校验失败：{e}") }),
+                    );
+                    return;
+                }
                 let old_cfg = Config::load_lenient().0;
                 let path = config_path();
                 let write_result = (|| -> Result<(), String> {
