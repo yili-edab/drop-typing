@@ -1342,7 +1342,7 @@ listen<{
     builtinActions = e.payload.builtin_actions || [];
     lightningItems = e.payload.lightning?.items || [];
     cmdCountdown.value = commandConfig.countdown_ms ? String(commandConfig.countdown_ms) : '';
-    cmdCountdownEffective.textContent = String(e.payload.effective_command_countdown_ms ?? 2000);
+    cmdCountdownEffective.textContent = String(e.payload.effective_command_countdown_ms ?? 1000);
     lightningThreshold.value = commandConfig.lightning_threshold
       ? String(commandConfig.lightning_threshold)
       : '';
@@ -1947,7 +1947,7 @@ function fillGeneralForm() {
   const t = generalConfig.thresholds || {};
   millisLongPress.value = t.long_press_threshold_ms ?? 150;
   millisDoublePress.value = t.double_press_window_ms ?? 350;
-  millisCommandCountdown.value = t.command_countdown_ms ?? 2000;
+  millisCommandCountdown.value = t.command_countdown_ms ?? 1000;
 }
 
 function collectGeneralPayload() {

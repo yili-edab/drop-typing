@@ -56,7 +56,7 @@ fn from_config_action(a: &crate::config::CommandActionEntry) -> ParsedCommand {
 
 /// 按短语长度自适应关键词阈值：短语越短、声学概率越低，
 /// 使用比统一阈值更低的触发阈值，避免短别名（如「复制」）漏触发。
-fn per_keyword_threshold(phrase: &str, base: f32) -> f32 {
+fn per_keyword_threshold(phrase: &str, base: f64) -> f64 {
     let chars = phrase.chars().filter(|c| !c.is_whitespace()).count();
     let adjusted = match chars {
         0..=2 => base - 0.25,
@@ -113,7 +113,7 @@ pub fn effective_aliases(cfg: &CommandConfig) -> Vec<AliasEntry> {
 }
 
 /// 在 text2token 行 `... @label` 的 `@` 前插入每词阈值 `#0.70`。
-fn keyword_line(line: &str, threshold: f32) -> anyhow::Result<String> {
+fn keyword_line(line: &str, threshold: f64) -> anyhow::Result<String> {
     match line.rfind(" @") {
         Some(i) => Ok(format!(
             "{} #{:.2} {}",

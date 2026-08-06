@@ -160,47 +160,51 @@
             <sl-button id="btn-lightning-tokens" size="small" variant="neutral">查看 Token</sl-button>
           </sl-details>
 
-          <label>指令确认倒计时</label>
-          <div class="field-row">
-            <sl-input id="cmd-countdown" type="number" min="50" max="10000" size="small"
-                      placeholder="留空使用全局值"></sl-input>
-            <p class="help">当前生效：<span id="cmd-countdown-effective">2000</span> ms。</p>
-          </div>
+          <sl-details id="countdown-details" class="voice-details" open>
+            <span slot="summary">指令确认倒计时</span>
+            <div class="field-row">
+              <sl-input id="cmd-countdown" type="number" min="50" max="10000" size="small"
+                        placeholder="留空使用全局值"></sl-input>
+              <p class="help">当前生效：<span id="cmd-countdown-effective">1000</span> ms。</p>
+            </div>
+          </sl-details>
 
-          <label>指令词表</label>
-          <p class="help">未配置任何条目时使用内置词表；用户条目优先匹配，内置兜底。</p>
-          <div id="command-lexicon">
-            <div class="lex-block" data-kind="action">
-              <h3>动作别名</h3>
-              <p class="help" id="lex-action-help">说「截图」→ 按 Shift+Cmd+4</p>
-              <div class="lex-rows"></div>
-              <sl-button size="small" variant="neutral" class="lex-add" data-kind="action">添加动作别名</sl-button>
+          <sl-details id="lexicon-details" class="voice-details" open>
+            <span slot="summary">指令词表</span>
+            <p class="help">未配置任何条目时使用内置词表；用户条目优先匹配，内置兜底。</p>
+            <div id="command-lexicon">
+              <div class="lex-block" data-kind="action">
+                <h3>动作别名</h3>
+                <p class="help" id="lex-action-help">说「截图」→ 按 Shift+Cmd+4</p>
+                <div class="lex-rows"></div>
+                <sl-button size="small" variant="neutral" class="lex-add" data-kind="action">添加动作别名</sl-button>
+              </div>
+              <div class="lex-block" data-kind="modifier">
+                <h3>修饰键别名</h3>
+                <p class="help" id="lex-modifier-help">说「win」→ 识别为 Cmd</p>
+                <div class="lex-rows"></div>
+                <sl-button size="small" variant="neutral" class="lex-add" data-kind="modifier">添加修饰键别名</sl-button>
+              </div>
+              <div class="lex-block" data-kind="key">
+                <h3>按键别名</h3>
+                <p class="help">说「去除」→ 识别为 DELETE</p>
+                <div class="lex-rows"></div>
+                <sl-button size="small" variant="neutral" class="lex-add" data-kind="key">添加按键别名</sl-button>
+              </div>
+              <div class="lex-block" data-kind="stop">
+                <h3>停用词</h3>
+                <p class="help">「给我按复制」中的「给我」会被丢弃</p>
+                <div class="lex-rows"></div>
+                <sl-button size="small" variant="neutral" class="lex-add" data-kind="stop">添加停用词</sl-button>
+              </div>
+              <div class="lex-block" data-kind="homophone">
+                <h3>字母谐音</h3>
+                <p class="help">ASR 把字母 A 识别成「挨」时建立映射</p>
+                <div class="lex-rows"></div>
+                <sl-button size="small" variant="neutral" class="lex-add" data-kind="homophone">添加谐音映射</sl-button>
+              </div>
             </div>
-            <div class="lex-block" data-kind="modifier">
-              <h3>修饰键别名</h3>
-              <p class="help" id="lex-modifier-help">说「win」→ 识别为 Cmd</p>
-              <div class="lex-rows"></div>
-              <sl-button size="small" variant="neutral" class="lex-add" data-kind="modifier">添加修饰键别名</sl-button>
-            </div>
-            <div class="lex-block" data-kind="key">
-              <h3>按键别名</h3>
-              <p class="help">说「去除」→ 识别为 DELETE</p>
-              <div class="lex-rows"></div>
-              <sl-button size="small" variant="neutral" class="lex-add" data-kind="key">添加按键别名</sl-button>
-            </div>
-            <div class="lex-block" data-kind="stop">
-              <h3>停用词</h3>
-              <p class="help">「给我按复制」中的「给我」会被丢弃</p>
-              <div class="lex-rows"></div>
-              <sl-button size="small" variant="neutral" class="lex-add" data-kind="stop">添加停用词</sl-button>
-            </div>
-            <div class="lex-block" data-kind="homophone">
-              <h3>字母谐音</h3>
-              <p class="help">ASR 把字母 A 识别成「挨」时建立映射</p>
-              <div class="lex-rows"></div>
-              <sl-button size="small" variant="neutral" class="lex-add" data-kind="homophone">添加谐音映射</sl-button>
-            </div>
-          </div>
+          </sl-details>
 
           <div class="actions">
             <sl-button id="btn-command-reset" variant="default">重置</sl-button>
@@ -347,7 +351,7 @@
               <p class="help">两次短按松手间隔；窗口内第二击视为双击清空。默认 350ms。</p>
               <sl-input id="millis-command-countdown" type="number" min="50" max="10000"
                         label="指令倒计时（ms）"></sl-input>
-              <p class="help">语音指令确认倒计时，默认 2000ms；「语音控制」面板的倒计时会覆盖此值。</p>
+              <p class="help">语音指令确认倒计时，默认 1000ms；「语音控制」面板的倒计时会覆盖此值。</p>
             </div>
             <div class="actions">
               <sl-button id="btn-millis-save" variant="primary">保存</sl-button>

@@ -609,21 +609,18 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
 }
 
 /* ── 语音控制面板：模块间距 ─────────────────────────────── */
-#panel-voice-command > label,
-#panel-voice-command > .help,
-#panel-voice-command > .field-row,
-#panel-voice-command > .lex-block,
-#panel-voice-command > .actions,
-#panel-voice-command > .lightning-details {
+#panel-voice-command > .lightning-details,
+#panel-voice-command > .voice-details,
+#panel-voice-command > .actions {
   margin-top: 16px;
 }
 
-#panel-voice-command > label:first-child,
 #panel-voice-command > .lightning-details:first-child {
   margin-top: 0;
 }
 
-.lightning-details {
+.lightning-details,
+.voice-details {
   margin-bottom: 8px;
 }
 

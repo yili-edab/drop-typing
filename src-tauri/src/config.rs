@@ -96,7 +96,7 @@ pub struct CommandConfig {
     pub homophone: Vec<CommandHomophoneEntry>,
     /// 闪电指令统一触发阈值（默认 0.7；仅动作别名生效）
     #[serde(default)]
-    pub lightning_threshold: Option<f32>,
+    pub lightning_threshold: Option<f64>,
     /// 用户关闭闪电的短语（内置 + 用户动作别名通用；只影响闪电，不影响文字解析）
     #[serde(default)]
     pub lightning_disabled: Vec<String>,
@@ -104,11 +104,13 @@ pub struct CommandConfig {
 
 impl CommandConfig {
     /// 闪电指令有效阈值（未配置或越界时回退默认 0.7）
-    pub fn effective_lightning_threshold(&self) -> f32 {
-        match self.lightning_threshold {
+    pub fn effective_lightning_threshold(&self) -> f64 {
+        let v = match self.lightning_threshold {
             Some(v) if v > 0.0 && v <= 1.0 => v,
             _ => 0.7,
-        }
+        };
+        // 归一化到两位小数，避免 f32 历史值（如 0.699999988079071）在界面上显示难看
+        (v * 100.0).round() / 100.0
     }
 }
 
@@ -825,6 +827,13 @@ mod tests {
         cfg.lightning_threshold = Some(1.5);
         assert_eq!(cfg.effective_lightning_threshold(), 0.7);
         cfg.lightning_threshold = Some(-0.1);
+        assert_eq!(cfg.effective_lightning_threshold(), 0.7);
+    }
+
+    #[test]
+    fn lightning_threshold_rounds_legacy_f32_value() {
+        let mut cfg = CommandConfig::default();
+        cfg.lightning_threshold = Some(0.699999988079071);
         assert_eq!(cfg.effective_lightning_threshold(), 0.7);
     }
 

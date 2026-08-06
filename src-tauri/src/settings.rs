@@ -968,6 +968,9 @@ pub fn register_settings_handlers(app: &AppHandle) {
                     );
                     return;
                 }
+                if let Some(v) = cmd.lightning_threshold {
+                    cmd.lightning_threshold = Some((v * 100.0).round() / 100.0);
+                }
                 crate::config::prune_lightning_disabled(&mut cmd);
                 let mut cfg = Config::load_lenient().0;
                 cfg.command = cmd;
