@@ -1901,7 +1901,8 @@ fn handle_lightning_hit(
         };
         match result {
             Ok(()) => {
-                std::thread::sleep(Duration::from_millis(600));
+                // 闪电命中后的反馈停留：让用户看清「指令 + 匹配方式徽标 + 已执行」
+                std::thread::sleep(Duration::from_millis(1500));
                 if gen.load(Ordering::SeqCst) == my_gen {
                     staging.clear_command();
                     staging.hide();
