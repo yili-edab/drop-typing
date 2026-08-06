@@ -28,6 +28,7 @@ use crate::command;
 use crate::config::{Config, WakewordConfig};
 use crate::hotkey::{self, HotkeyEvent};
 use crate::inject::{self, Injector};
+use crate::lightning;
 use crate::llm::{self, TextCleaner};
 use crate::prompts;
 use crate::script;
@@ -679,7 +680,8 @@ fn run_loop(
                         });
 
                         let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-                        fwd_done_rx = Some(spawn_audio_forwarder(pcm_rx, fwd_rx));
+                        fwd_done_rx =
+                            Some(spawn_audio_forwarder(pcm_rx, fwd_rx, None, None));
 
                         // 后台建连，不阻塞事件循环
                         let p = Arc::clone(p);
@@ -780,7 +782,8 @@ fn run_loop(
                             });
 
                             let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-                            fwd_done_rx = Some(spawn_audio_forwarder(pcm_rx, fwd_rx));
+                            fwd_done_rx =
+                                Some(spawn_audio_forwarder(pcm_rx, fwd_rx, None, None));
 
                             let p = Arc::clone(p);
                             let (sess_tx, sess_rx) = mpsc::channel();
@@ -1061,6 +1064,8 @@ fn run_loop(
 fn spawn_audio_forwarder(
     pcm_rx: mpsc::Receiver<Vec<u8>>,
     fwd_rx: mpsc::Receiver<Arc<dyn RealtimeSession>>,
+    matcher: Option<Arc<dyn lightning::AudioMatcher>>,
+    hit_tx: Option<mpsc::Sender<command::ParsedCommand>>,
 ) -> mpsc::Receiver<()> {
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -1070,6 +1075,11 @@ fn spawn_audio_forwarder(
             if sess.is_none() {
                 if let Ok(s) = fwd_rx.try_recv() {
                     for chunk in buf.drain(..) {
+                        if let (Some(m), Some(tx)) = (&matcher, &hit_tx) {
+                            if let Some(cmd) = m.feed(&chunk) {
+                                let _ = tx.send(cmd);
+                            }
+                        }
                         if s.send_audio(&chunk).is_err() {
                             let _ = done_tx.send(());
                             return;
@@ -1080,6 +1090,11 @@ fn spawn_audio_forwarder(
             }
             match pcm_rx.recv() {
                 Ok(chunk) => {
+                    if let (Some(m), Some(tx)) = (&matcher, &hit_tx) {
+                        if let Some(cmd) = m.feed(&chunk) {
+                            let _ = tx.send(cmd);
+                        }
+                    }
                     if let Some(ref s) = sess {
                         if s.send_audio(&chunk).is_err() {
                             let _ = done_tx.send(());
@@ -1096,6 +1111,11 @@ fn spawn_audio_forwarder(
         if sess.is_none() {
             if let Ok(s) = fwd_rx.recv() {
                 for chunk in buf.drain(..) {
+                    if let (Some(m), Some(tx)) = (&matcher, &hit_tx) {
+                        if let Some(cmd) = m.feed(&chunk) {
+                            let _ = tx.send(cmd);
+                        }
+                    }
                     if s.send_audio(&chunk).is_err() {
                         break;
                     }
@@ -1304,7 +1324,7 @@ fn start_wake_recording(
     });
 
     let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-    let fwd_done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx);
+    let fwd_done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx, None, None);
 
     // 后台建连
     let (sess_tx, sess_rx) = mpsc::channel();
@@ -1510,7 +1530,7 @@ mod tests {
         // 服务端收到空音频（EmptyAudio）。
         let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
         let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-        let done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx);
+        let done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx, None, None);
 
         pcm_tx.send(vec![1]).unwrap();
         pcm_tx.send(vec![2]).unwrap();
@@ -1532,7 +1552,7 @@ mod tests {
         // 保证服务端不会先收到 finish-task 而报 EmptyAudio。
         let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
         let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-        let done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx);
+        let done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx, None, None);
 
         pcm_tx.send(vec![9, 9]).unwrap();
         drop(pcm_tx);
@@ -1550,6 +1570,50 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0], vec![9, 9]);
         assert_eq!(sess.finish_calls.load(Ordering::SeqCst), 1);
+    }
+
+    struct FakeMatcher {
+        hits: StdMutex<Vec<Vec<u8>>>,
+    }
+
+    impl crate::lightning::AudioMatcher for FakeMatcher {
+        fn feed(&self, pcm: &[u8]) -> Option<command::ParsedCommand> {
+            if self.hits.lock().unwrap().iter().any(|h| h.as_slice() == pcm) {
+                Some(command::ParsedCommand::Combo(command::KeyCombo {
+                    modifiers: vec![command::Modifier::Command],
+                    key: "C".to_string(),
+                }))
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn forwarder_reports_lightning_hit() {
+        let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>();
+        let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
+        let (hit_tx, hit_rx) = mpsc::channel::<command::ParsedCommand>();
+        let matcher: Arc<dyn crate::lightning::AudioMatcher> = Arc::new(FakeMatcher {
+            hits: StdMutex::new(vec![vec![7, 7]]),
+        });
+        let done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx, Some(matcher), Some(hit_tx));
+
+        pcm_tx.send(vec![1]).unwrap();
+        pcm_tx.send(vec![7, 7]).unwrap();
+        drop(pcm_tx);
+
+        let sess = Arc::new(RecordingSession::new());
+        fwd_tx.send(sess.clone()).unwrap();
+        drop(fwd_tx);
+
+        let hit = hit_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("应收到闪电命中");
+        assert_eq!(hit.display(), "CMD+C");
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("转发器应完成");
     }
 
     #[test]
