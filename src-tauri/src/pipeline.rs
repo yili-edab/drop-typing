@@ -652,6 +652,10 @@ fn run_loop(
                 staging.partial("");
                 staging.set_repair_note(""); // 清除上次修正的修复意见
                 staging.clear_command(); // 清除上次指令的展示/倒计时
+                // 控制通道：进入即清空之前的暂存条内容（避免旧文本混在指令展示后）
+                if mode == RecordMode::Command {
+                    staging.take();
+                }
                 // 暂不 show：等超时判定为长按后才显示，避免短按瞬间闪现
 
                 // 创建 PCM 通道，录音立即开始
@@ -1273,6 +1277,10 @@ fn start_wake_recording(
     staging.set_repair_note("");
     staging.clear_command();
     staging.clear_error();
+    // 控制通道：进入即清空之前的暂存条内容
+    if mode == RecordMode::Command {
+        staging.take();
+    }
 
     // 显示暂存条 + 状态徽章
     staging.show();
