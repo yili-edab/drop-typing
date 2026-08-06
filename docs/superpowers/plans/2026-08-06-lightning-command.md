@@ -412,14 +412,10 @@ pub mod lightning;
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use crate::command::{self, KeyCombo, ParsedCommand};
 use crate::config::CommandConfig;
-use crate::wakeword::sherpa::SherpaKws;
 use crate::wakeword::text2token::Text2Token;
-use crate::wakeword::WakeWord;
 
 /// 动作别名来源标记（设置页展示用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -517,6 +513,161 @@ fn keyword_line(line: &str, threshold: f32) -> anyhow::Result<String> {
     }
 }
 
+/// 设置页展示用闪电清单。
+pub fn settings_view(cfg: &crate::config::Config, resource_dir: &Path) -> serde_json::Value {
+    let t2t = crate::wakeword::sherpa::resolve_model_dir(&cfg.wakeword.model_dir, resource_dir)
+        .and_then(|d| Text2Token::load(&d).ok());
+    let disabled: std::collections::HashSet<String> = cfg
+        .command
+        .lightning_disabled
+        .iter()
+        .map(|p| normalize_phrase(p))
+        .collect();
+    let threshold = cfg.command.effective_lightning_threshold();
+    let items: Vec<serde_json::Value> = all_aliases(&cfg.command)
+        .iter()
+        .map(|a| {
+            let token_line = t2t
+                .as_ref()
+                .and_then(|t| t.convert(&a.phrase, &a.phrase).ok())
+                .and_then(|l| keyword_line(&l, threshold).ok());
+            serde_json::json!({
+                "phrase": a.phrase,
+                "display": a.command.display(),
+                "builtin": matches!(a.source, AliasSource::Builtin),
+                "enabled": !disabled.contains(&normalize_phrase(&a.phrase)),
+                "token_line": token_line,
+            })
+        })
+        .collect();
+    serde_json::json!({ "available": t2t.is_some(), "items": items })
+}
+```
+
+并把第 1 步的 `mod tests` 放在文件末尾。
+
+- [ ] **步骤 4：运行测试验证通过**
+
+运行：`cd src-tauri && cargo test normalize_phrase all_aliases effective_aliases keyword_line`
+预期：全部 `ok`
+
+- [ ] **步骤 5：Commit**
+
+```bash
+git add src-tauri/src/lightning.rs src-tauri/src/lib.rs
+git commit -m "feat(lightning): 闪电指令词表合并与关键词行生成"
+```
+
+---
+
+## 任务 4：sherpa 命中 label 接口 + 闪电引擎加载
+
+**文件：**
+- 修改：`src-tauri/src/wakeword/sherpa.rs`
+- 修改：`src-tauri/src/lightning.rs`
+
+- [ ] **步骤 1：重构 `process_frame`，抽出 `process_frame_label`**
+
+在 `SherpaKws` 中新增：
+
+```rust
+    /// 解码一帧音频并返回命中的原始 keyword（trim + 小写）；
+    /// 命中后自动重置 stream。
+    pub fn process_frame_label(
+        &self,
+        stream: &mut sherpa_onnx::OnlineStream,
+        frame: &[f32],
+    ) -> Option<String> {
+        stream.accept_waveform(16_000, frame);
+        let mut decode_iters: u32 = 0;
+        while self.spotter.is_ready(stream) {
+            self.spotter.decode(stream);
+            decode_iters += 1;
+            if decode_iters > 500 {
+                eprintln!(
+                    "[drop-typing] 唤醒词：decode 迭代超过上限（{}），强制跳出",
+                    decode_iters,
+                );
+                self.spotter.reset(stream);
+                return None;
+            }
+        }
+        let result: Option<KeywordResult> = self.spotter.get_result(stream);
+        match result {
+            Some(r) if !r.keyword.is_empty() => {
+                let detected = r.keyword.trim().to_lowercase();
+                self.spotter.reset(stream);
+                Some(detected)
+            }
+            _ => None,
+        }
+    }
+```
+
+然后把原 `process_frame` 的 `accept_waveform / decode / get_result / reset` 部分替换为：
+
+```rust
+    pub fn process_frame(
+        &self,
+        stream: &mut sherpa_onnx::OnlineStream,
+        frame: &[f32],
+    ) -> Option<WakeWord> {
+        let detected = self.process_frame_label(stream, frame)?;
+        // 以下为原匹配逻辑（exact / contains）+ 日志，保持不变
+        let find_exact = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
+            map.iter()
+                .find(|(k, _)| k.trim().to_lowercase() == detected)
+                .map(|(_, w)| w.clone())
+        };
+        let find_contains = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
+            map.iter()
+                .find(|(k, _)| {
+                    let normalized = k.trim().to_lowercase();
+                    detected.contains(&normalized) || normalized.contains(&detected)
+                })
+                .map(|(_, w)| w.clone())
+        };
+        let wake_word = find_exact(&self.keyword_map)
+            .or_else(|| find_contains(&self.keyword_map));
+        match &wake_word {
+            Some(ww) => {
+                eprintln!(
+                    "[drop-typing] 🎤 唤醒词匹配成功：keyword='{}' action='{}'",
+                    ww.text, ww.action,
+                );
+            }
+            None => {
+                let keys: Vec<&str> = self.keyword_map.keys().map(|s| s.as_str()).collect();
+                eprintln!(
+                    "[drop-typing] ⚠ 唤醒词匹配失败！r.keyword='{}'，keyword_map keys={:?}",
+                    detected, keys,
+                );
+            }
+        }
+        wake_word
+    }
+```
+
+- [ ] **步骤 2：运行现有测试验证无回归**
+
+运行：`cd src-tauri && cargo test`
+预期：现有测试全部通过（含 `find_in_dirs_locates_model_dir` 与 forwarder 测试）
+
+- [ ] **步骤 3：在 lightning.rs 新增闪电引擎与匹配器**
+
+在 `src-tauri/src/lightning.rs` 顶部 `use` 区补充：
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use crate::wakeword::sherpa::SherpaKws;
+use crate::wakeword::WakeWord;
+```
+
+在 `settings_view` 之前新增：
+
+```rust
 /// 闪电引擎：sherpa KWS + 短语 → 指令映射。
 pub struct LightningSpotter {
     kws: SherpaKws,
@@ -653,159 +804,21 @@ pub fn from_config(
         }
     }
 }
-
-/// 设置页展示用闪电清单。
-pub fn settings_view(cfg: &crate::config::Config, resource_dir: &Path) -> serde_json::Value {
-    let t2t = crate::wakeword::sherpa::resolve_model_dir(&cfg.wakeword.model_dir, resource_dir)
-        .and_then(|d| Text2Token::load(&d).ok());
-    let disabled: std::collections::HashSet<String> = cfg
-        .command
-        .lightning_disabled
-        .iter()
-        .map(|p| normalize_phrase(p))
-        .collect();
-    let threshold = cfg.command.effective_lightning_threshold();
-    let items: Vec<serde_json::Value> = all_aliases(&cfg.command)
-        .iter()
-        .map(|a| {
-            let token_line = t2t
-                .as_ref()
-                .and_then(|t| t.convert(&a.phrase, &a.phrase).ok())
-                .and_then(|l| keyword_line(&l, threshold).ok());
-            serde_json::json!({
-                "phrase": a.phrase,
-                "display": a.command.display(),
-                "builtin": matches!(a.source, AliasSource::Builtin),
-                "enabled": !disabled.contains(&normalize_phrase(&a.phrase)),
-                "token_line": token_line,
-            })
-        })
-        .collect();
-    serde_json::json!({ "available": t2t.is_some(), "items": items })
-}
 ```
 
-并把第 1 步的 `mod tests` 放在文件末尾。
+- [ ] **步骤 4：运行测试与编译检查**
 
-- [ ] **步骤 4：运行测试验证通过**
+```bash
+cd src-tauri && cargo test && cargo check
+```
 
-运行：`cd src-tauri && cargo test normalize_phrase all_aliases effective_aliases keyword_line`
-预期：全部 `ok`
+预期：全部通过（`LightningSpotter::load` 的模型加载留给任务 10 手动清单验证）
 
 - [ ] **步骤 5：Commit**
 
 ```bash
-git add src-tauri/src/lightning.rs src-tauri/src/lib.rs
-git commit -m "feat(lightning): 闪电指令词表合并与关键词行生成"
-```
-
----
-
-## 任务 4：sherpa 命中 label 接口 + 闪电引擎加载
-
-**文件：**
-- 修改：`src-tauri/src/wakeword/sherpa.rs`
-
-- [ ] **步骤 1：重构 `process_frame`，抽出 `process_frame_label`**
-
-在 `SherpaKws` 中新增：
-
-```rust
-    /// 解码一帧音频并返回命中的原始 keyword（trim + 小写）；
-    /// 命中后自动重置 stream。
-    pub fn process_frame_label(
-        &self,
-        stream: &mut sherpa_onnx::OnlineStream,
-        frame: &[f32],
-    ) -> Option<String> {
-        stream.accept_waveform(16_000, frame);
-        let mut decode_iters: u32 = 0;
-        while self.spotter.is_ready(stream) {
-            self.spotter.decode(stream);
-            decode_iters += 1;
-            if decode_iters > 500 {
-                eprintln!(
-                    "[drop-typing] 唤醒词：decode 迭代超过上限（{}），强制跳出",
-                    decode_iters,
-                );
-                self.spotter.reset(stream);
-                return None;
-            }
-        }
-        let result: Option<KeywordResult> = self.spotter.get_result(stream);
-        match result {
-            Some(r) if !r.keyword.is_empty() => {
-                let detected = r.keyword.trim().to_lowercase();
-                self.spotter.reset(stream);
-                Some(detected)
-            }
-            _ => None,
-        }
-    }
-```
-
-然后把原 `process_frame` 的 `accept_waveform / decode / get_result / reset` 部分替换为：
-
-```rust
-    pub fn process_frame(
-        &self,
-        stream: &mut sherpa_onnx::OnlineStream,
-        frame: &[f32],
-    ) -> Option<WakeWord> {
-        let detected = self.process_frame_label(stream, frame)?;
-        // 以下为原匹配逻辑（exact / contains）+ 日志，保持不变
-        let find_exact = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
-            map.iter()
-                .find(|(k, _)| k.trim().to_lowercase() == detected)
-                .map(|(_, w)| w.clone())
-        };
-        let find_contains = |map: &HashMap<String, WakeWord>| -> Option<WakeWord> {
-            map.iter()
-                .find(|(k, _)| {
-                    let normalized = k.trim().to_lowercase();
-                    detected.contains(&normalized) || normalized.contains(&detected)
-                })
-                .map(|(_, w)| w.clone())
-        };
-        let wake_word = find_exact(&self.keyword_map)
-            .or_else(|| find_contains(&self.keyword_map));
-        match &wake_word {
-            Some(ww) => {
-                eprintln!(
-                    "[drop-typing] 🎤 唤醒词匹配成功：keyword='{}' action='{}'",
-                    ww.text, ww.action,
-                );
-            }
-            None => {
-                let keys: Vec<&str> = self.keyword_map.keys().map(|s| s.as_str()).collect();
-                eprintln!(
-                    "[drop-typing] ⚠ 唤醒词匹配失败！r.keyword='{}'，keyword_map keys={:?}",
-                    detected, keys,
-                );
-            }
-        }
-        wake_word
-    }
-```
-
-- [ ] **步骤 2：运行现有测试验证无回归**
-
-运行：`cd src-tauri && cargo test`
-预期：现有测试全部通过（含 `find_in_dirs_locates_model_dir` 与 forwarder 测试）
-
-- [ ] **步骤 3：验证闪电引擎可加载（手动，模型在仓库内）**
-
-```bash
-cd src-tauri && cargo check
-```
-
-预期：编译通过（`LightningSpotter::load` 的模型加载留给任务 10 手动清单验证）
-
-- [ ] **步骤 4：Commit**
-
-```bash
-git add src-tauri/src/wakeword/sherpa.rs
-git commit -m "refactor(wakeword): 抽出 process_frame_label 供闪电引擎复用"
+git add src-tauri/src/wakeword/sherpa.rs src-tauri/src/lightning.rs
+git commit -m "feat(lightning): 闪电引擎与匹配器（复用 process_frame_label）"
 ```
 
 ---
