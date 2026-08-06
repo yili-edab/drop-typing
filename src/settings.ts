@@ -52,6 +52,9 @@ const cmdCountdown = document.getElementById('cmd-countdown') as any;
 const cmdCountdownEffective = document.getElementById('cmd-countdown-effective')!;
 const btnCommandSave = document.getElementById('btn-command-save') as any;
 const btnCommandReset = document.getElementById('btn-command-reset') as any;
+const lightningThreshold = document.getElementById('lightning-threshold') as any;
+const lightningList = document.getElementById('lightning-list')!;
+const btnLightningTokens = document.getElementById('btn-lightning-tokens') as any;
 
 // ---- 高级面板 DOM ----
 const asrProvider = document.getElementById('asr-provider') as any;
@@ -525,6 +528,16 @@ interface CommandConfigState {
   key: CommandEntry[];
   stop: CommandEntry[];
   homophone: CommandEntry[];
+  lightning_threshold: number | null;
+  lightning_disabled: string[];
+}
+
+interface LightningItem {
+  phrase: string;
+  display: string;
+  builtin: boolean;
+  enabled: boolean;
+  token_line: string | null;
 }
 
 const KEY_OPTIONS = [
@@ -944,8 +957,101 @@ let commandConfig: CommandConfigState = {
   key: [],
   stop: [],
   homophone: [],
+  lightning_threshold: null,
+  lightning_disabled: [],
 };
 let commandLoaded = false;
+
+let builtinActions: { phrase: string; display: string }[] = [];
+let lightningItems: LightningItem[] = [];
+const actionErrors = new Set<CommandEntry>();
+
+function normalizePhrase(s: string): string {
+  return s.trim()
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .toLowerCase();
+}
+
+function isLightningDisabled(phrase: string): boolean {
+  const key = normalizePhrase(phrase);
+  return commandConfig.lightning_disabled.some((p) => normalizePhrase(p) === key);
+}
+
+function setLightningDisabled(phrase: string, disabled: boolean) {
+  const key = normalizePhrase(phrase);
+  const arr = commandConfig.lightning_disabled;
+  const idx = arr.findIndex((p) => normalizePhrase(p) === key);
+  if (disabled && idx < 0) arr.push(phrase);
+  if (!disabled && idx >= 0) arr.splice(idx, 1);
+  renderLightningList();
+  renderLexRows('action');
+}
+
+function actionErrorText(row: CommandEntry): string {
+  const p = (row.phrase || '').trim();
+  if (!p) return '';
+  const key = normalizePhrase(p);
+  const conflict = builtinActions.find((b) => normalizePhrase(b.phrase) === key);
+  if (conflict) return `与内置指令「${conflict.phrase}」重复`;
+  const dup = commandConfig.action.find(
+    (other) => other !== row && normalizePhrase(other.phrase || '') === key,
+  );
+  if (dup) return `与已有指令「${dup.phrase}」重复`;
+  return '';
+}
+
+function validateActionRows(): boolean {
+  const seen = new Map<string, string>();
+  for (const b of builtinActions) seen.set(normalizePhrase(b.phrase), b.phrase);
+  let ok = true;
+  for (const row of commandConfig.action) {
+    const p = (row.phrase || '').trim();
+    if (!p) { actionErrors.delete(row); continue; }
+    const key = normalizePhrase(p);
+    if (seen.has(key)) { actionErrors.add(row); ok = false; }
+    else { actionErrors.delete(row); seen.set(key, row.phrase || ''); }
+  }
+  return ok;
+}
+
+function renderLightningList() {
+  lightningList.innerHTML = '';
+  if (lightningItems.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'help';
+    empty.textContent = '暂无动作别名；在下方「动作别名」中添加后会自动出现在这里。';
+    lightningList.appendChild(empty);
+    return;
+  }
+  for (const item of lightningItems) {
+    const enabled = !isLightningDisabled(item.phrase);
+    const row = document.createElement('div');
+    row.className = 'lightning-row';
+    const phrase = document.createElement('span');
+    phrase.className = 'lightning-phrase';
+    phrase.textContent = item.phrase;
+    const arrow = document.createElement('span');
+    arrow.className = 'lightning-arrow';
+    arrow.textContent = '→';
+    const display = document.createElement('span');
+    display.className = 'lightning-display';
+    display.textContent = item.display;
+    const badge = document.createElement('span');
+    badge.className = 'lightning-badge ' + (item.builtin ? 'builtin' : 'user');
+    badge.textContent = item.builtin ? '内置' : '自定义';
+    const status = document.createElement('span');
+    status.className = 'lightning-status';
+    status.textContent = !item.token_line
+      ? '未加载（仍走文字识别）'
+      : (enabled ? '已加载' : '已关闭');
+    const sw = document.createElement('sl-switch');
+    sw.size = 'small';
+    sw.checked = enabled;
+    sw.addEventListener('sl-change', () => setLightningDisabled(item.phrase, !sw.checked));
+    row.append(phrase, arrow, display, badge, status, sw);
+    lightningList.appendChild(row);
+  }
+}
 
 function requestCommandConfig() {
   emit('drop-typing://get-command-config');
@@ -995,6 +1101,11 @@ function renderLexRows(kind: string) {
     phrase.value = row.phrase || '';
     phrase.addEventListener('sl-input', (e: any) => {
       row.phrase = e.target.value?.trim() || '';
+    });
+    phrase.addEventListener('sl-blur', () => {
+      row.phrase = (phrase.value || '').trim();
+      validateActionRows();
+      renderLexRows(kind);
     });
     el.appendChild(phrase);
 
@@ -1072,6 +1183,16 @@ function renderLexRows(kind: string) {
         kbBtn.addEventListener('click', () => openKeyboard(row));
         el.appendChild(kbBtn);
       }
+
+      const lightningSw = document.createElement('sl-switch');
+      lightningSw.className = 'lex-lightning';
+      lightningSw.size = 'small';
+      lightningSw.textContent = '闪电指令';
+      lightningSw.checked = !isLightningDisabled(row.phrase || '');
+      lightningSw.addEventListener('sl-change', () => {
+        setLightningDisabled(row.phrase || '', !lightningSw.checked);
+      });
+      el.appendChild(lightningSw);
     } else if (kind === 'modifier') {
       const modSel = document.createElement('sl-select');
       modSel.className = 'lex-key';
@@ -1106,6 +1227,14 @@ function renderLexRows(kind: string) {
       el.appendChild(letterSel);
     }
 
+    if (kind === 'action') {
+      const err = document.createElement('span');
+      err.className = 'lex-error';
+      err.textContent = actionErrorText(row);
+      err.style.display = err.textContent ? '' : 'none';
+      el.appendChild(err);
+    }
+
     const del = document.createElement('sl-button');
     del.className = 'lex-del';
     del.size = 'small';
@@ -1135,6 +1264,8 @@ function buildCommandPayload() {
   const nonEmpty = <T>(arr: T[]): T[] => arr.filter((x: any) => (x.phrase || '').trim());
   return {
     countdown_ms: cmdCountdown.value ? parseInt(cmdCountdown.value, 10) : null,
+    lightning_threshold: lightningThreshold.value ? parseFloat(lightningThreshold.value) : null,
+    lightning_disabled: commandConfig.lightning_disabled,
     action: nonEmpty(commandConfig.action).map(a => ({
       phrase: a.phrase,
       modifiers: normalizeModifiers(a.modifiers || [], !!a.distinguish_sides),
@@ -1149,6 +1280,11 @@ function buildCommandPayload() {
 }
 
 btnCommandSave.addEventListener('click', () => {
+  if (!validateActionRows()) {
+    toast('danger', '存在重复的指令名字，请先修正后再保存');
+    renderAllLex();
+    return;
+  }
   btnCommandSave.textContent = '保存中…';
   btnCommandSave.disabled = true;
   emit('drop-typing://save-command-config', buildCommandPayload());
@@ -1157,13 +1293,24 @@ btnCommandSave.addEventListener('click', () => {
 btnCommandReset.addEventListener('click', async () => {
   const ok = await showConfirm('确认清空用户指令词表并恢复内置默认？当前修改将丢失。');
   if (!ok) return;
-  commandConfig = { countdown_ms: null, action: [], modifier: [], key: [], stop: [], homophone: [] };
+  commandConfig = {
+    countdown_ms: null, action: [], modifier: [], key: [], stop: [], homophone: [],
+    lightning_threshold: null, lightning_disabled: [],
+  };
   cmdCountdown.value = '';
+  lightningThreshold.value = '';
+  renderLightningList();
   renderAllLex();
   toast('success', '已清空，点击「保存」生效');
 });
 
-listen<{ config: CommandConfigState; effective_command_countdown_ms: number }>(
+listen<{
+  config: CommandConfigState;
+  effective_command_countdown_ms: number;
+  lightning_threshold: number | null;
+  builtin_actions: { phrase: string; display: string }[];
+  lightning: { available: boolean; items: LightningItem[] };
+}>(
   'drop-typing://command-config', (e) => {
     const c = e.payload.config || {};
     commandConfig = {
@@ -1178,9 +1325,17 @@ listen<{ config: CommandConfigState; effective_command_countdown_ms: number }>(
       key: c.key || [],
       stop: c.stop || [],
       homophone: c.homophone || [],
+      lightning_threshold: e.payload.lightning_threshold ?? null,
+      lightning_disabled: c.lightning_disabled || [],
     };
+    builtinActions = e.payload.builtin_actions || [];
+    lightningItems = e.payload.lightning?.items || [];
     cmdCountdown.value = commandConfig.countdown_ms ? String(commandConfig.countdown_ms) : '';
     cmdCountdownEffective.textContent = String(e.payload.effective_command_countdown_ms ?? 2000);
+    lightningThreshold.value = commandConfig.lightning_threshold
+      ? String(commandConfig.lightning_threshold)
+      : '';
+    renderLightningList();
     renderAllLex();
     commandLoaded = true;
   }
@@ -1194,6 +1349,17 @@ listen<{ success: boolean; error?: string }>('drop-typing://command-config-saved
   } else {
     toast('danger', e.payload.error || '保存失败');
   }
+});
+
+btnLightningTokens.addEventListener('click', () => {
+  const content = document.getElementById('dlg-tokens-content') as HTMLPreElement;
+  const lines = lightningItems.map((it) => {
+    const state = isLightningDisabled(it.phrase) ? '（已关闭）' : '';
+    const token = it.token_line || '（不可用：模型缺失或转换失败）';
+    return `${it.phrase} → ${it.display} ${state}\n${token}`;
+  });
+  content.textContent = lines.join('\n\n') || '暂无闪电指令';
+  dlgTokens.show();
 });
 
 // ── 语音唤醒面板 ─────────────────────────────────────────────────────

@@ -547,3 +547,63 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
 #sound-test-status {
   margin-top: 8px;
 }
+
+/* ── 闪电指令 ─────────────────────────────────────────────── */
+#lightning-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.lightning-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--sl-color-neutral-200);
+  border-radius: 6px;
+}
+
+.lightning-phrase {
+  font-weight: 600;
+}
+
+.lightning-arrow {
+  color: var(--sl-color-neutral-500);
+}
+
+.lightning-display {
+  font-family: var(--sl-font-mono);
+}
+
+.lightning-badge {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.lightning-badge.builtin {
+  background: var(--sl-color-neutral-200);
+}
+
+.lightning-badge.user {
+  background: var(--sl-color-primary-100);
+  color: var(--sl-color-primary-700);
+}
+
+.lightning-status {
+  color: var(--sl-color-neutral-500);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.lex-lightning {
+  margin-left: 4px;
+}
+
+.lex-error {
+  color: var(--sl-color-danger-600);
+  font-size: 12px;
+  width: 100%;
+}
