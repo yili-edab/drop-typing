@@ -29,7 +29,7 @@ use crate::config::KeywordEntry;
 /// - `"clear"`   → 立即清空暂存条并隐藏（不录音）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WakeWord {
-    /// 自然语言关键词文本（如 "DT打"）
+    /// 自然语言关键词文本（如 "小易记"）
     pub text: String,
     /// 检测后进入的通道："input" | "repair" | "command"
     pub action: String,

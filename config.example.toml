@@ -79,25 +79,25 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # pre_roll_ms = 500               # 唤醒词前保留的音频时长
 # ring_buffer_duration_ms = 3000  # 环形缓冲区时长
 #
-# # 自定义唤醒词列表（缺省时使用内置默认值 DT打/DT修/DT控/DT确认/DT清空）
+# # 自定义唤醒词列表（缺省时使用内置默认值 小易记/小易修/小易控/小易确认/小易清空）
 # [[wakeword.keywords]]
-# keyword = "DT打"               # 自然语言关键词
+# keyword = "小易记"             # 自然语言关键词
 # action = "input"                # → 录入通道
 #
 # [[wakeword.keywords]]
-# keyword = "DT修"
+# keyword = "小易修"
 # action = "repair"               # → 修复通道
 #
 # [[wakeword.keywords]]
-# keyword = "DT控"
+# keyword = "小易控"
 # action = "command"              # → 指令通道
 #
 # [[wakeword.keywords]]
-# keyword = "DT确认"
+# keyword = "小易确认"
 # action = "commit"               # → 立即提交暂存条（不录音）
 #
 # [[wakeword.keywords]]
-# keyword = "DT清空"
+# keyword = "小易清空"
 # action = "clear"                # → 清空暂存条并隐藏（不录音）
 
 # -----------------------------------------------------------

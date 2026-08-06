@@ -127,7 +127,7 @@ src-tauri/src/
 │     │                                               │
 │     ├─→ wakeword/openwakeword.rs                    │
 │     │   每 80ms 取一帧（1280 采样）                    │
-│     │   ort 推理 → 三个置信度（DT打 / DT修 / DT按）    │
+│     │   ort 推理 → 唤醒词置信度（小易记/小易修/小易控） │
 │     │   任一置信度 > 阈值 → WakeEvent::Detected { word }│
 │     │                                               │
 │     └─→ pipeline.rs                                 │
