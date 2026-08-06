@@ -32,7 +32,7 @@ use crate::lightning;
 use crate::llm::{self, TextCleaner};
 use crate::prompts;
 use crate::script;
-use crate::staging::Staging;
+use crate::staging::{CommandEngine, Staging};
 use crate::wakeword::{self, WakeEvent, WakeWord};
 
 /// 实时 ASR 松手后等待后台建连的总预算。
@@ -1880,9 +1880,9 @@ fn handle_lightning_hit(
     staging.set_repair_note("");
     staging.clear_command();
     staging.clear_error();
-    let display = parsed.display();
+    let display = spaced_command_display(&parsed);
     eprintln!("[drop-typing] ⚡ 闪电指令命中：{display}");
-    staging.show_command(&display, 0);
+    staging.show_command(&display, 0, CommandEngine::Lightning);
     staging.committed();
 
     let staging = staging.clone();
@@ -1915,6 +1915,11 @@ fn handle_lightning_hit(
     });
 }
 
+/// 暂存条展示用的组合键文案：符号两侧加空格（CMD+C → CMD + C）。
+fn spaced_command_display(parsed: &command::ParsedCommand) -> String {
+    parsed.display().replace('+', " + ")
+}
+
 /// 指令通道（M4）：ASR 文本 → 本地解析 → 暂存条大字展示 + 右侧秒级倒计时 →
 /// 自动模拟按键或执行脚本。
 ///
@@ -1943,7 +1948,8 @@ fn run_command(
 
     // 倒计时秒数（不足 1 秒按 1 秒计；配 0 则立即执行）
     let mut remaining = (countdown.as_millis() as u64 + 999) / 1000;
-    staging.show_command(&parsed.display(), remaining);
+    let display = spaced_command_display(&parsed);
+    staging.show_command(&display, remaining, CommandEngine::Text);
 
     let staging = staging.clone();
     let injector = injector.clone();

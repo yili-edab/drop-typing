@@ -11,6 +11,13 @@ const statusEl = document.getElementById("status") as HTMLDivElement;
 const repairNoteEl = document.getElementById("repair-note") as HTMLDivElement;
 const commandEl = document.getElementById("command") as HTMLDivElement;
 const countdownEl = document.getElementById("countdown") as HTMLDivElement;
+const commandEngineEl = document.getElementById("command-engine") as HTMLSpanElement;
+
+const ENGINE_LABELS: Record<string, string> = {
+  lightning: "闪电指令",
+  text: "文本引擎",
+  ai: "AI 匹配",
+};
 
 const PLACEHOLDER = "按住热键说话，松开出字（短按提交）";
 const BAR_MAX_HEIGHT = 520;
@@ -141,12 +148,15 @@ listen<{ text: string }>("drop-typing://repair-note", (e) => {
 });
 
 // 按键指令展示（M4 指令通道）：大字 + 右侧秒级倒计时
-listen<{ text: string; seconds: number }>("drop-typing://command", (e) => {
+listen<{ text: string; seconds: number; engine: string }>("drop-typing://command", (e) => {
   currentText = "";
   partialText = "";
   bar.classList.remove("placeholder", "error");
   bar.classList.add("command-mode");
   commandEl.textContent = e.payload.text;
+  const engine = e.payload.engine || "";
+  commandEngineEl.textContent = ENGINE_LABELS[engine] || "";
+  commandEngineEl.className = "command-engine" + (engine ? ` engine-${engine}` : "");
   countdownEl.textContent = e.payload.seconds > 0 ? String(e.payload.seconds) : "";
   countdownEl.classList.toggle("visible", e.payload.seconds > 0);
   resize();
@@ -162,6 +172,8 @@ listen<{ seconds: number }>("drop-typing://command-tick", (e) => {
 listen("drop-typing://command-clear", () => {
   bar.classList.remove("command-mode");
   commandEl.textContent = "";
+  commandEngineEl.textContent = "";
+  commandEngineEl.className = "command-engine";
   countdownEl.textContent = "";
   countdownEl.classList.remove("visible");
   resize();

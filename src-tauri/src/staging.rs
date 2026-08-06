@@ -227,10 +227,14 @@ impl Staging {
     }
 
     /// 展示识别出的按键指令（M4）：大字显示 + 右侧秒级倒计时
-    pub fn show_command(&self, display: &str, seconds: u64) {
+    pub fn show_command(&self, display: &str, seconds: u64, engine: CommandEngine) {
         let _ = self.app.emit(
             "drop-typing://command",
-            serde_json::json!({ "text": display, "seconds": seconds }),
+            serde_json::json!({
+                "text": display,
+                "seconds": seconds,
+                "engine": engine.key(),
+            }),
         );
     }
 
@@ -303,5 +307,27 @@ impl Staging {
     /// 提交成功反馈
     pub fn committed(&self) {
         let _ = self.app.emit("drop-typing://committed", ());
+    }
+}
+
+/// 指令匹配方式（暂存条徽标展示）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandEngine {
+    /// 本地声学识别（闪电指令）
+    Lightning,
+    /// ASR 文字 + 词表解析（文本引擎）
+    Text,
+    /// 大模型匹配（预留钩子，尚未实现）
+    Ai,
+}
+
+impl CommandEngine {
+    /// 徽标对应的稳定键名（前端映射中文文案）
+    pub fn key(self) -> &'static str {
+        match self {
+            CommandEngine::Lightning => "lightning",
+            CommandEngine::Text => "text",
+            CommandEngine::Ai => "ai",
+        }
     }
 }

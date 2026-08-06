@@ -323,6 +323,50 @@ body {
   letter-spacing: 2px;
 }
 
+/* ---- 指令匹配方式徽标（闪电指令 / 文本引擎 / AI 匹配） ---- */
+
+#command-engine {
+  display: none;
+  flex: none;
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+#bar.command-mode #command-engine {
+  display: inline-block;
+}
+
+#command-engine.engine-lightning {
+  background: #ffe066;
+  color: #5a3e00;
+}
+
+#command-engine.engine-text {
+  background: rgba(255, 255, 255, 0.25);
+  color: inherit;
+}
+
+#command-engine.engine-ai {
+  background: rgba(180, 140, 255, 0.35);
+  color: inherit;
+}
+
+@media (prefers-color-scheme: light) {
+  #command-engine.engine-text {
+    background: rgba(0, 0, 0, 0.10);
+  }
+
+  #command-engine.engine-ai {
+    background: rgba(120, 80, 220, 0.15);
+    color: #3d1c00;
+  }
+}
+
 /* ---- 右侧秒级倒计时徽章 ---- */
 
 #countdown {
