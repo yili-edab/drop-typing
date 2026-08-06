@@ -12,7 +12,7 @@
       <nav id="menu">
         <ul>
           <li data-panel="ai-prompt" class="active">AI 提示词</li>
-          <li data-panel="shortcut">快捷键</li>
+          <li data-panel="shortcut">功能热键</li>
           <li data-panel="voice-command">语音控制</li>
           <li data-panel="wakeword">语音唤醒</li>
           <li data-panel="hardware">定制硬件</li>
@@ -158,13 +158,13 @@
           <div id="command-lexicon">
             <div class="lex-block" data-kind="action">
               <h3>动作别名</h3>
-              <p class="help">说「截图」→ 按 Shift+Cmd+4</p>
+              <p class="help" id="lex-action-help">说「截图」→ 按 Shift+Cmd+4</p>
               <div class="lex-rows"></div>
               <sl-button size="small" variant="neutral" class="lex-add" data-kind="action">添加动作别名</sl-button>
             </div>
             <div class="lex-block" data-kind="modifier">
               <h3>修饰键别名</h3>
-              <p class="help">说「win」→ 识别为 Cmd</p>
+              <p class="help" id="lex-modifier-help">说「win」→ 识别为 Cmd</p>
               <div class="lex-rows"></div>
               <sl-button size="small" variant="neutral" class="lex-add" data-kind="modifier">添加修饰键别名</sl-button>
             </div>

@@ -549,6 +549,31 @@ const MOD_DISPLAY: Record<string, string> = {
   Shift: 'SHIFT', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT',
   Command: 'CMD', Meta: 'CMD', MetaLeft: 'L-CMD', MetaRight: 'R-CMD', Cmd: 'CMD',
 };
+const WINDOWS_MOD_DISPLAY: Record<string, string> = {
+  Control: 'CTRL', ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', Ctrl: 'CTRL',
+  Option: 'ALT', Alt: 'L-ALT', AltGr: 'R-ALT', Opt: 'ALT',
+  Shift: 'SHIFT', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT',
+  Command: 'WIN', Meta: 'WIN', MetaLeft: 'L-WIN', MetaRight: 'R-WIN', Cmd: 'WIN',
+};
+
+/** 是否按 Windows 形式显示修饰键（后端平台信息优先，未加载时用 UA 兜底） */
+function isWindowsUI(): boolean {
+  return shortcutState.platform === 'windows' || /Windows/i.test(navigator.userAgent);
+}
+
+/** 修饰键统一显示：Windows 用 WIN/ALT，macOS 用 CMD/OPT */
+function modDisplay(name: string): string {
+  const map = isWindowsUI() ? WINDOWS_MOD_DISPLAY : MOD_DISPLAY;
+  return map[name] || name.toUpperCase();
+}
+
+/** 修饰键别名下拉选项文字（value 保持 Cmd/Opt 内部名，仅显示层切换） */
+function modOptionLabel(value: string): string {
+  if (!isWindowsUI()) return value;
+  if (value === 'Cmd') return 'Win';
+  if (value === 'Opt') return 'Alt';
+  return value;
+}
 const PRECISE_MODS = new Set([
   'ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight',
   'Alt', 'AltGr', 'ShiftLeft', 'ShiftRight',
@@ -572,7 +597,7 @@ function normalizeModifiers(mods: string[], sides: boolean): string[] {
 function formatComboText(mods: string[], key: string): string {
   const sorted = [...mods]
     .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
-  return [...sorted.map(m => MOD_DISPLAY[m] || m.toUpperCase()), key.toUpperCase()].join(' + ');
+  return [...sorted.map(m => modDisplay(m)), key.toUpperCase()].join(' + ');
 }
 
 function formatActionCombo(row: CommandEntry): string {
@@ -768,7 +793,7 @@ function renderKeyboard() {
           : keyboardMods.includes(modValue);
         const btn = document.createElement('button');
         btn.className = 'kb-mod kb-key' + (active ? ' active' : '');
-        btn.textContent = MOD_DISPLAY[modValue] || modValue;
+        btn.textContent = modDisplay(modValue);
         btn.addEventListener('click', () => {
           if (keyboardMode === 'single') {
             keyboardSingleKey = modValue;
@@ -1054,7 +1079,7 @@ function renderLexRows(kind: string) {
       for (const m of MOD_OPTIONS) {
         const o = document.createElement('sl-option');
         o.value = m;
-        o.textContent = m;
+        o.textContent = modOptionLabel(m);
         modSel.appendChild(o);
       }
       modSel.value = row.modifier || 'Cmd';
@@ -1213,7 +1238,7 @@ function renderWakewordList() {
     const input = document.createElement('sl-input');
     input.className = 'kw-text';
     input.size = 'small';
-    input.placeholder = '例如 DT打';
+    input.placeholder = '例如 小易记';
     input.value = entry.keyword;
     input.addEventListener('sl-input', (e: any) => {
       wakewordEntries[idx].keyword = e.target.value?.trim() || '';
@@ -1288,7 +1313,7 @@ wwEnabledSwitch.addEventListener('sl-change', () => {
 
 // 重置
 btnWakewordReset.addEventListener('click', async () => {
-  const ok = await showConfirm('确认将唤醒词重置为默认值（DT打/DT修/DT控）？当前修改将丢失。');
+  const ok = await showConfirm('确认将唤醒词重置为默认值（小易记/小易修/小易控/小易确认/小易清空）？当前修改将丢失。');
   if (!ok) return;
   emit('drop-typing://reset-wakeword-config');
 });
@@ -1413,13 +1438,31 @@ const KEY_DISPLAY_UNIFIED: Record<string, string> = {
 function formatShortcut(keys: string[], _platform: string): string {
   if (!keys || keys.length === 0) return '未设置';
   return keys.map(k => {
-    if (MOD_DISPLAY[k]) return MOD_DISPLAY[k];
+    const d = modDisplay(k);
+    if (d !== k.toUpperCase()) return d;
     if (KEY_DISPLAY_UNIFIED[k]) return KEY_DISPLAY_UNIFIED[k];
     if (/^Key[A-Z]$/.test(k)) return k.slice(3);
     if (/^Num[0-9]$/.test(k)) return k.slice(3);
     if (/^F([1-9]|1[0-2])$/.test(k)) return k;
     return k;
   }).join(' + ');
+}
+
+/** 语音控制面板示例文案按平台显示（Windows 用 Win，macOS 用 Cmd） */
+function applyPlatformHelp() {
+  const win = isWindowsUI();
+  const actionHelp = document.getElementById('lex-action-help');
+  const modHelp = document.getElementById('lex-modifier-help');
+  if (actionHelp) {
+    actionHelp.textContent = win
+      ? '说「截图」→ 按 Shift+Win+4'
+      : '说「截图」→ 按 Shift+Cmd+4';
+  }
+  if (modHelp) {
+    modHelp.textContent = win
+      ? '说「win」→ 识别为 Win'
+      : '说「win」→ 识别为 Cmd';
+  }
 }
 
 // ---- 状态 ----
@@ -1442,6 +1485,8 @@ let shortcutState: ShortcutState = {
   mouse: {},
   defaults: { keyboard: {}, mouse: {} },
 };
+
+applyPlatformHelp();
 
 let shortcutCapture: { channel: string; timer: number | null } | null = null;
 
@@ -1655,7 +1700,8 @@ listen<any>('drop-typing://shortcut-config', (e) => {
   // 平台提示
   platformHintEl.textContent = d.platform === 'macos'
     ? 'macOS：单键快捷键（如 R-CMD、R-OPT 等）'
-    : 'Windows：组合快捷键（如 CMD + ALT 等，可勾选「区分左右」精确到单侧）';
+    : 'Windows：组合快捷键（如 WIN + ALT 等，可勾选「区分左右」精确到单侧）';
+  applyPlatformHelp();
   renderAllShortcut();
 });
 
