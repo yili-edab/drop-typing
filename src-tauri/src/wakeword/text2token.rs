@@ -9,8 +9,8 @@
 //! 使用方式：
 //! ```ignore
 //! let t2t = Text2Token::load(&model_dir)?;
-//! let token_line = t2t.convert("DT打", "DT打")?;
-//! // → "D IY1 T IY1 d ǎ @DT打"
+//! let token_line = t2t.convert("小易记", "小易记")?;
+//! // → "x iǎo y ì j ì @小易记"
 //! ```
 //!
 //! 数据文件（需放在模型目录下）：
@@ -61,8 +61,8 @@ const LETTER_NAMES: &[(&str, &[&str])] = &[
 /// 文本→音素 token 转换器。
 ///
 /// 加载 tokens.txt、CJK 拼音映射表、英文 lexicon 三份数据，
-/// 将自然语言关键词（如 "DT打"）转换为 sherpa-onnx KWS 模型
-/// 所需的音素 token 格式（如 "D IY1 T IY1 d ǎ @DT打"）。
+/// 将自然语言关键词（如 "小易记"）转换为 sherpa-onnx KWS 模型
+/// 所需的音素 token 格式（如 "x iǎo y ì j ì @小易记"）。
 pub struct Text2Token {
     /// token 字符串 → token ID（从 tokens.txt 加载）
     token_table: HashMap<String, i32>,
@@ -221,8 +221,8 @@ impl Text2Token {
 
     /// 将一条自然语言关键词转换为音素 token 行。
     ///
-    /// `keyword` 是用户写的自然语言关键词（如 `"DT打"`、`"小助手"`）。
-    /// `label` 是检测结果标签（如 `"DT打"`），会以 `@label` 形式附在行尾。
+    /// `keyword` 是用户写的自然语言关键词（如 `"小易记"`、`"小助手"`）。
+    /// `label` 是检测结果标签（如 `"小易记"`），会以 `@label` 形式附在行尾。
     ///
     /// 返回可直接写入 keywords.txt 的一行文本。
     ///
@@ -495,6 +495,9 @@ mod tests {
         let model_dir = builtin_model_dir();
         let t2t = Text2Token::load(&model_dir).expect("加载 text2token");
 
+        let result_xy = t2t.convert("小易记", "小易记").expect("转换 小易记");
+        assert_eq!(result_xy, "x iǎo y ì j ì @小易记");
+
         let result = t2t.convert("小助手", "小助手").expect("转换 小助手");
         assert!(result.starts_with("x iǎo zh ù sh ǒu"));
         assert!(result.ends_with("@小助手"));
@@ -553,21 +556,42 @@ mod tests {
 
         let tmp = std::env::temp_dir().join("test_keywords_drop_typing.txt");
         let items: Vec<(String, String)> = vec![
-            ("DT打".into(), "DT打".into()),
-            ("DT修".into(), "DT修".into()),
-            ("DT控".into(), "DT控".into()),
+            ("小易记".into(), "小易记".into()),
+            ("小易修".into(), "小易修".into()),
+            ("小易控".into(), "小易控".into()),
+            ("小易确认".into(), "小易确认".into()),
+            ("小易清空".into(), "小易清空".into()),
         ];
 
         t2t.write_keywords_txt(&items, &tmp).expect("写入 keywords.txt");
 
         let content = std::fs::read_to_string(&tmp).expect("读取 keywords.txt");
         let lines: Vec<&str> = content.trim().lines().collect();
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0], "D IY1 T IY1 d ǎ @DT打");
-        assert_eq!(lines[1], "D IY1 T IY1 x iū @DT修");
-        assert_eq!(lines[2], "D IY1 T IY1 k òng @DT控");
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], "x iǎo y ì j ì @小易记");
+        assert_eq!(lines[1], "x iǎo y ì x iū @小易修");
+        assert_eq!(lines[2], "x iǎo y ì k òng @小易控");
+        assert_eq!(lines[3], "x iǎo y ì q uè r èn @小易确认");
+        assert_eq!(lines[4], "x iǎo y ì q īng k ōng @小易清空");
 
         // 清理
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_convert_xiaoyi_builtin_keywords() {
+        let model_dir = builtin_model_dir();
+        let t2t = Text2Token::load(&model_dir).expect("加载 text2token");
+        let expected = [
+            ("小易记", "x iǎo y ì j ì @小易记"),
+            ("小易修", "x iǎo y ì x iū @小易修"),
+            ("小易控", "x iǎo y ì k òng @小易控"),
+            ("小易确认", "x iǎo y ì q uè r èn @小易确认"),
+            ("小易清空", "x iǎo y ì q īng k ōng @小易清空"),
+        ];
+        for (keyword, expected_line) in expected {
+            let line = t2t.convert(keyword, keyword).expect("转换");
+            assert_eq!(line, expected_line);
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! 唤醒词引擎抽象。
 //!
 //! 使用 sherpa-onnx KeywordSpotter 检测唤醒词。支持：
-//! - 内置默认唤醒词（DT打/DT修/DT控），通过静态 keywords.txt 加载
+//! - 内置默认唤醒词（小易记/小易修/小易控/小易确认/小易清空），通过 text2token 动态生成
 //! - 用户自定义唤醒词（配置文件中的 [[wakeword.keywords]]），通过 text2token 动态生成
 //!
 //! 启动逻辑：
@@ -77,11 +77,11 @@ pub enum WakeEvent {
 
 /// 三个内置默认唤醒词（用户未自定义时使用）。
 const BUILTIN_DEFAULTS: &[(&str, &str)] = &[
-    ("DT打", "input"),
-    ("DT修", "repair"),
-    ("DT控", "command"),
-    ("DT确认", "commit"),
-    ("DT清空", "clear"),
+    ("小易记", "input"),
+    ("小易修", "repair"),
+    ("小易控", "command"),
+    ("小易确认", "commit"),
+    ("小易清空", "clear"),
 ];
 
 // ── 关键词列表构建 ─────────────────────────────────────────────────────
@@ -120,7 +120,7 @@ pub fn resolve_keywords(cfg: &crate::config::WakewordConfig) -> (Vec<(String, Wa
                 )
             })
             .collect();
-        // 内置默认值也走 text2token 动态路径（含 DT确认/DT清空 等）
+        // 内置默认值也走 text2token 动态路径（含小易确认/小易清空 等）
         (map, true)
     }
 }
@@ -215,5 +215,21 @@ pub fn create_engine(
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_defaults_are_xiaoyi_words() {
+        let texts: Vec<&str> = BUILTIN_DEFAULTS.iter().map(|(t, _)| *t).collect();
+        assert_eq!(
+            texts,
+            vec!["小易记", "小易修", "小易控", "小易确认", "小易清空"]
+        );
+        let actions: Vec<&str> = BUILTIN_DEFAULTS.iter().map(|(_, a)| *a).collect();
+        assert_eq!(actions, vec!["input", "repair", "command", "commit", "clear"]);
     }
 }

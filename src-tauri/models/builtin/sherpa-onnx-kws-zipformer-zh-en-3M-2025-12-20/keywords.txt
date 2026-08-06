@@ -1,3 +1,5 @@
-D IY1 T IY1 d ǎ @DT打
-D IY1 T IY1 x iū @DT修
-D IY1 T IY1 k òng @DT控
+x iǎo y ì j ì @小易记
+x iǎo y ì x iū @小易修
+x iǎo y ì k òng @小易控
+x iǎo y ì q uè r èn @小易确认
+x iǎo y ì q īng k ōng @小易清空

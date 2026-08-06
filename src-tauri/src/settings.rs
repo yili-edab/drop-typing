@@ -385,11 +385,11 @@ pub fn register_settings_handlers(app: &AppHandle) {
         eprintln!("[drop-typing] get-wakeword-config received");
         let (cfg, _) = Config::load_lenient();
         let defaults: Vec<serde_json::Value> = vec![
-            serde_json::json!({ "keyword": "DT打", "action": "input" }),
-            serde_json::json!({ "keyword": "DT修", "action": "repair" }),
-            serde_json::json!({ "keyword": "DT控", "action": "command" }),
-            serde_json::json!({ "keyword": "DT确认", "action": "commit" }),
-            serde_json::json!({ "keyword": "DT清空", "action": "clear" }),
+            serde_json::json!({ "keyword": "小易记", "action": "input" }),
+            serde_json::json!({ "keyword": "小易修", "action": "repair" }),
+            serde_json::json!({ "keyword": "小易控", "action": "command" }),
+            serde_json::json!({ "keyword": "小易确认", "action": "commit" }),
+            serde_json::json!({ "keyword": "小易清空", "action": "clear" }),
         ];
         let keywords: Vec<serde_json::Value> = cfg
             .wakeword
