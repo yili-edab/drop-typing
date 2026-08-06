@@ -84,6 +84,8 @@ enum State {
         wake_word: Option<WakeWord>,
         /// 唤醒词录音的 ASR 结果接收端
         wake_finish_rx: Option<mpsc::Receiver<anyhow::Result<String>>>,
+        /// 指令通道的闪电命中接收端（None = 非指令通道或闪电不可用）
+        lightning_rx: Option<mpsc::Receiver<command::ParsedCommand>>,
     },
     /// 输入通道短按后等待判定：超时则单击提交，窗口内再次短按则双击清空
     PendingCommit { since: Instant },
@@ -97,17 +99,19 @@ struct RuntimeState {
     backend: Option<Arc<AsrBackend>>,
     cleaner: Option<Arc<dyn TextCleaner>>,
     lexicon: Arc<command::Lexicon>,
+    lightning: Option<Arc<lightning::LightningSpotter>>,
     threshold: Duration,
     double_press: Duration,
     command_countdown: Duration,
 }
 
 impl RuntimeState {
-    fn from_config(cfg: &Config) -> Self {
+    fn from_config(cfg: &Config, resource_dir: &std::path::Path) -> Self {
         Self {
             backend: asr::backend_from_config(cfg).map(Arc::new),
             cleaner: llm::cleaner_from_config(cfg),
             lexicon: Arc::new(command::Lexicon::build(Some(&cfg.command))),
+            lightning: lightning::from_config(cfg, resource_dir),
             threshold: Duration::from_millis(cfg.long_press_threshold_ms),
             double_press: Duration::from_millis(cfg.double_press_window_ms),
             command_countdown: Duration::from_millis(cfg.effective_command_countdown_ms()),
@@ -194,7 +198,8 @@ pub fn start(app: AppHandle) {
     let (cfg, warning) = Config::load_lenient();
     let injector = inject::default_injector(app.clone());
     let source = hotkey::default_source();
-    let runtime = Arc::new(Mutex::new(RuntimeState::from_config(&cfg)));
+    let resource_dir = app.path().resource_dir().unwrap_or_default();
+    let runtime = Arc::new(Mutex::new(RuntimeState::from_config(&cfg, &resource_dir)));
 
     // 启动诊断：配置 / 权限问题直接以黄底红字显示在暂存条
     if let Some(w) = warning {
@@ -239,10 +244,10 @@ pub fn start(app: AppHandle) {
     // 支持运行中热开关（设置页保存后经 runtime-reload 命令重建/停止）。
     let (wake_cmd_tx, wake_cmd_rx) = mpsc::channel::<WakeCommand>();
     let (wake_out_tx, wake_out_rx) = mpsc::channel::<WakeOutcome>();
-    let wake_resource_dir = app.path().resource_dir().unwrap_or_default();
+    let resource_dir_for_reload = resource_dir.clone();
     std::thread::Builder::new()
         .name("drop-typing-wake-manager".into())
-        .spawn(move || wake_manager_loop(wake_cmd_rx, wake_out_tx, wake_resource_dir))
+        .spawn(move || wake_manager_loop(wake_cmd_rx, wake_out_tx, resource_dir.clone()))
         .expect("启动唤醒词管理线程失败");
     if cfg.wakeword.enabled {
         let _ = wake_cmd_tx.send(WakeCommand::Enable(
@@ -269,7 +274,7 @@ pub fn start(app: AppHandle) {
     app.listen("drop-typing://runtime-reload", move |_| {
         let (new_cfg, _) = Config::load_lenient();
         let mut g = runtime_for_reload.lock().unwrap();
-        *g = RuntimeState::from_config(&new_cfg);
+        *g = RuntimeState::from_config(&new_cfg, &resource_dir_for_reload);
         if g.backend.is_none() {
             staging_for_reload.error(
                 "未配置 ASR API Key 或 provider 未知。请检查配置文件（见 config.example.toml）。",
@@ -372,7 +377,15 @@ fn run_loop(
     loop {
         // 每轮循环取一次运行时快照：设置页保存后可热加载的配置
         // （模型 / 毫秒 / 指令词表）在此生效
-        let (backend, cleaner, lexicon, threshold, double_press, command_countdown) = {
+        let (
+            backend,
+            cleaner,
+            lexicon,
+            threshold,
+            double_press,
+            command_countdown,
+            lightning,
+        ) = {
             let g = runtime.lock().unwrap();
             (
                 g.backend.clone(),
@@ -381,6 +394,7 @@ fn run_loop(
                 g.threshold,
                 g.double_press,
                 g.command_countdown,
+                g.lightning.clone(),
             )
         };
         // 唤醒词热开关：应用管理线程发来的资源更新（启/停麦克风监听）
@@ -447,7 +461,15 @@ fn run_loop(
         match rx.recv_timeout(poll_interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // 按住期间：超阈值才显示暂存条（避免短按一闪而过），然后设"识别中"
-                if let State::Recording { started, mode, bar_shown, wake_finish_rx, .. } = &mut state {
+                if let State::Recording {
+                    started,
+                    mode,
+                    bar_shown,
+                    wake_finish_rx,
+                    lightning_rx,
+                    tainted,
+                    ..
+                } = &mut state {
                     if started.elapsed() >= threshold {
                         if !*bar_shown {
                             staging.show();
@@ -455,6 +477,23 @@ fn run_loop(
                         }
                         staging.set_busy(true);
                         staging.set_status(mode.recognizing_label());
+                    }
+                    // 闪电命中：作废 ASR、立即执行（tainted 的录音不触发）
+                    if !*tainted {
+                        if let Some(rx) = lightning_rx {
+                            if let Ok(cmd) = rx.try_recv() {
+                                handle_lightning_hit(&staging, &injector, cmd, &command_gen);
+                                if let Some(r) = &recorder {
+                                    r.discard();
+                                }
+                                staging.set_recording(false);
+                                staging.set_busy(false);
+                                state = idle_state(&wake_buffer, &wake_rx);
+                                continue;
+                            }
+                        }
+                    } else if let Some(rx) = lightning_rx.take() {
+                        drop(rx); // 作废后丢弃未读命中
                     }
                     // 唤醒词录音：轮询 ASR 结果
                     if let Some(ref rx) = wake_finish_rx {
@@ -522,6 +561,7 @@ fn run_loop(
                                     _ => {
                                         start_wake_recording(
                                             &staging, &recorder, wcfg, &backend,
+                                            &lightning,
                                             buffer, word, position,
                                             &cleaner, &injector, command_countdown,
                                             &command_gen, &lexicon, &current_style,
@@ -664,6 +704,7 @@ fn run_loop(
                 let session = None;
                 let mut pending_rx = None;
                 let mut fwd_done_rx = None;
+                let mut lightning_rx = None;
 
                 if let Some(b) = &backend {
                     if let AsrBackend::Realtime(p) = b.as_ref() {
@@ -680,8 +721,26 @@ fn run_loop(
                         });
 
                         let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-                        fwd_done_rx =
-                            Some(spawn_audio_forwarder(pcm_rx, fwd_rx, None, None));
+                        if mode == RecordMode::Command {
+                            if let Some(spotter) = &lightning {
+                                let matcher = Arc::new(lightning::LightningMatcher::new(
+                                    spotter.clone(),
+                                ));
+                                let (hit_tx, hit_rx) =
+                                    mpsc::channel::<command::ParsedCommand>();
+                                lightning_rx = Some(hit_rx);
+                                fwd_done_rx = Some(spawn_audio_forwarder(
+                                    pcm_rx, fwd_rx, Some(matcher), Some(hit_tx),
+                                ));
+                            } else {
+                                fwd_done_rx = Some(spawn_audio_forwarder(
+                                    pcm_rx, fwd_rx, None, None,
+                                ));
+                            }
+                        } else {
+                            fwd_done_rx =
+                                Some(spawn_audio_forwarder(pcm_rx, fwd_rx, None, None));
+                        }
 
                         // 后台建连，不阻塞事件循环
                         let p = Arc::clone(p);
@@ -716,6 +775,7 @@ fn run_loop(
                     started_by_mouse: false,  // 键盘启动
                     wake_word: None,
                     wake_finish_rx: None,
+                    lightning_rx,
                 };
             }
 
@@ -816,7 +876,8 @@ fn run_loop(
                         fwd_done_rx,
                         started_by_mouse: true,  // 鼠标启动
                         wake_word: None,
-                    wake_finish_rx: None,
+                        wake_finish_rx: None,
+                        lightning_rx: None,
                     };
                 }
 
@@ -834,6 +895,7 @@ fn run_loop(
                     fwd_done_rx,
                     wake_word: _,
                     wake_finish_rx: _,
+                    lightning_rx: _,
                     started_by_mouse: _,
                 } = state
                 else {
@@ -942,6 +1004,7 @@ fn run_loop(
                     fwd_done_rx,
                     wake_word: _,
                     wake_finish_rx: _,
+                    lightning_rx: _,
                     started_by_mouse: _,
                 } = state
                 else {
@@ -1250,6 +1313,7 @@ fn start_wake_recording(
     _recorder: &Option<AudioRecorder>,
     wake_cfg: &WakewordConfig,
     backend: &Option<Arc<AsrBackend>>,
+    lightning: &Option<Arc<lightning::LightningSpotter>>,
     buffer: &Arc<RingBuffer>,
     word: WakeWord,
     position: u64,
@@ -1324,7 +1388,19 @@ fn start_wake_recording(
     });
 
     let (fwd_tx, fwd_rx) = mpsc::channel::<Arc<dyn RealtimeSession>>();
-    let fwd_done_rx = spawn_audio_forwarder(pcm_rx, fwd_rx, None, None);
+    let mut lightning_rx = None;
+    let fwd_done_rx = if mode == RecordMode::Command {
+        if let Some(spotter) = lightning {
+            let matcher = Arc::new(lightning::LightningMatcher::new(spotter.clone()));
+            let (hit_tx, hit_rx) = mpsc::channel::<command::ParsedCommand>();
+            lightning_rx = Some(hit_rx);
+            spawn_audio_forwarder(pcm_rx, fwd_rx, Some(matcher), Some(hit_tx))
+        } else {
+            spawn_audio_forwarder(pcm_rx, fwd_rx, None, None)
+        }
+    } else {
+        spawn_audio_forwarder(pcm_rx, fwd_rx, None, None)
+    };
 
     // 后台建连
     let (sess_tx, sess_rx) = mpsc::channel();
@@ -1420,6 +1496,7 @@ fn start_wake_recording(
         started_by_mouse: false,
         wake_word: Some(word),
         wake_finish_rx: Some(finish_rx),
+        lightning_rx,
     };
 }
 
@@ -1618,7 +1695,10 @@ mod tests {
 
     #[test]
     fn runtime_state_defaults() {
-        let st = RuntimeState::from_config(&Config::default());
+        let st = RuntimeState::from_config(
+            &Config::default(),
+            std::path::Path::new("/nonexistent-drop-typing-lightning-test"),
+        );
         assert!(st.backend.is_none());
         assert!(st.cleaner.is_none());
         assert_eq!(st.threshold, Duration::from_millis(150));
@@ -1633,7 +1713,10 @@ mod tests {
         cfg.long_press_threshold_ms = 500;
         cfg.double_press_window_ms = 400;
         cfg.command_countdown_ms = 3000;
-        let st = RuntimeState::from_config(&cfg);
+        let st = RuntimeState::from_config(
+            &cfg,
+            std::path::Path::new("/nonexistent-drop-typing-lightning-test"),
+        );
         assert_eq!(st.threshold, Duration::from_millis(500));
         assert_eq!(st.double_press, Duration::from_millis(400));
         assert_eq!(st.command_countdown, Duration::from_millis(3000));
@@ -1779,6 +1862,53 @@ fn repair_and_replace(
             }
             Err(e) => {
                 staging.error(&format!("修正失败，已保留原文：{e:#}"));
+            }
+        }
+    });
+}
+
+/// 闪电指令命中：作废在途 ASR/倒计时，立即执行并展示短暂反馈。
+fn handle_lightning_hit(
+    staging: &Staging,
+    injector: &Arc<dyn Injector>,
+    parsed: command::ParsedCommand,
+    gen: &Arc<AtomicU64>,
+) {
+    let my_gen = gen.fetch_add(1, Ordering::SeqCst) + 1;
+    staging.set_status("");
+    staging.partial("");
+    staging.set_repair_note("");
+    staging.clear_command();
+    staging.clear_error();
+    let display = parsed.display();
+    staging.show_command(&display, 0);
+    staging.committed();
+
+    let staging = staging.clone();
+    let injector = injector.clone();
+    let gen = gen.clone();
+    std::thread::spawn(move || {
+        let result = match parsed {
+            command::ParsedCommand::Combo(combo) => injector.simulate_combo(&combo),
+            command::ParsedCommand::Script(script_value) => {
+                staging.set_status("执行中");
+                let r = script::run(&script_value)
+                    .map_err(|e| anyhow::anyhow!("{e}"));
+                staging.set_status("");
+                r
+            }
+        };
+        match result {
+            Ok(()) => {
+                std::thread::sleep(Duration::from_millis(600));
+                if gen.load(Ordering::SeqCst) == my_gen {
+                    staging.clear_command();
+                    staging.hide();
+                }
+            }
+            Err(e) => {
+                staging.clear_command();
+                staging.error(&format!("闪电指令执行失败：{e:#}"));
             }
         }
     });
