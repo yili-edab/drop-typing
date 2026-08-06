@@ -88,6 +88,7 @@ src-tauri/
 ## 开发约定与注意事项
 
 - **语言**：代码注释、文档、commit 均使用中文
+- **跨平台优先（Windows + macOS）**：新增或修改任何功能时，必须同时考虑 Windows 与 macOS 两端的实现、配置、权限和分发方式，不能只在一端验证。至少覆盖：平台代码（`hotkey/`、`inject/`、`caret.rs` 等）、快捷键语义、路径解析、打包资源（`tauri.conf.json` resources / NSIS / .app）、CI 产物完整性。历史教训：唤醒词模型 `en.phone` 曾被 CI 上传规则漏掉（扩展名不在 `.onnx/.txt/.json` 匹配内），且 `Copy-Item` 在目标目录已存在时会生成 `models/models` 嵌套——新增任何资源或文件扩展名时，必须同步检查 Windows 构建产物与 Release 的上传/分发规则
 - **热键方案固定用 rdev**，不要换成 tauri-plugin-global-shortcut——M1 需要"裸右 ⌘ 单独按下 + 精确 press/release 事件 + 松开时长判定"，插件拿不到单独松开事件、也不支持裸修饰键语义
 - **rdev 是 vendored 补丁**：`Cargo.toml` 中 `[patch.crates-io] rdev = { path = "vendor/rdev" }`，移除了 CGEventTap 后台线程中对 TIS/TSM 输入法 API 的调用（macOS 26 主线程断言导致 EXC_BREAKPOINT），并在 Windows 钩子中把 Win 键拦截改为「仅吞属于 drop-typing 组合的 Win 键事件」，保证开始菜单、Win+E、Win+R 等系统快捷键可用。`cargo update` 时 rdev 被锁定在 0.5.3；上游修复前**不要移除该 patch**
 - `tauri.conf.json` 开启了 `macOSPrivateApi`（透明/置顶窗口需要）；CSP 为 `null`；窗口名为 `staging`，权限见 `capabilities/default.json`（仅 `core:default` + `core:event:default`）
