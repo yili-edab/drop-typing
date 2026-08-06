@@ -19,6 +19,7 @@ pub mod command;
 pub mod config;
 pub mod hotkey;
 pub mod inject;
+pub mod lightning;
 pub mod llm;
 pub mod pipeline;
 pub mod prompts;
