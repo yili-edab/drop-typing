@@ -10,6 +10,7 @@
 //! 执行是阻塞式的（调用方应放在后台线程）；不设超时、不展示 stdout，
 //! 失败时返回退出码与截断的 stderr 摘要。
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -138,7 +139,7 @@ fn run_shell_line(line: &str, shell: Option<&str>) -> Result<(), ScriptError> {
         // 因此整行必须原样拼接进命令行，不做二次转义。
         Command::new("cmd")
             .arg("/C")
-            .raw_arg(line.as_ref())
+            .raw_arg(OsStr::new(line))
             .current_dir(cwd)
             .output()
             .map_err(|e| ScriptError::new(format!("无法启动 cmd.exe：{e}")))?

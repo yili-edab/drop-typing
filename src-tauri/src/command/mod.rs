@@ -18,7 +18,7 @@ mod lexicon;
 pub use lexicon::Lexicon;
 use lexicon::LexOwned;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// 修饰键（macOS 语义）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
