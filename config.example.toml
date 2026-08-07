@@ -79,7 +79,7 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # pre_roll_ms = 500               # 唤醒词前保留的音频时长
 # ring_buffer_duration_ms = 3000  # 环形缓冲区时长
 #
-# # 自定义唤醒词列表（缺省时使用内置默认值 小易记/小易修/小易控/小易确认/小易清空）
+# # 自定义唤醒词列表（缺省时使用内置默认值 小易记/小易修/小易小易/小易确认/小易清空）
 # [[wakeword.keywords]]
 # keyword = "小易记"             # 自然语言关键词
 # action = "input"                # → 录入通道
@@ -89,7 +89,7 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # action = "repair"               # → 修复通道
 #
 # [[wakeword.keywords]]
-# keyword = "小易控"
+# keyword = "小易小易"
 # action = "command"              # → 指令通道
 #
 # [[wakeword.keywords]]
@@ -216,12 +216,15 @@ api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 # # script 支持两种写法：
 # #   - 已存在的脚本文件路径（绝对路径或 ~ 开头，按 shebang 执行，需 chmod +x）
 # #   - 一行 shell 命令，如 "open https://example.com"（macOS 交给 /bin/zsh -lc；
-# #     Windows 交给 cmd.exe /C 执行，如 "start https://example.com"）
+# #     Windows 默认交给 cmd.exe /C 执行，如 "start https://example.com"；
+# #     可用 shell 字段指定 "powershell"）
 # [[command.action]]
 # phrase = "跑备份"
 # modifiers = []
 # key = "C"
 # script = "/path/to/backup.sh"
+# # shell = "powershell"  # 仅一行命令生效：Windows 可选 cmd（默认）/ powershell；
+#                        # macOS 固定 zsh；脚本文件按扩展名执行，不受此字段影响
 
 # # 修饰键别名
 # [[command.modifier]]

@@ -46,7 +46,10 @@ pub fn normalize_phrase(s: &str) -> String {
 
 fn from_config_action(a: &crate::config::CommandActionEntry) -> ParsedCommand {
     match &a.script {
-        Some(s) if !s.trim().is_empty() => ParsedCommand::Script(s.clone()),
+        Some(s) if !s.trim().is_empty() => ParsedCommand::Script {
+            command: s.clone(),
+            shell: a.shell.clone(),
+        },
         _ => ParsedCommand::Combo(KeyCombo {
             modifiers: a.modifiers.clone(),
             key: a.key.clone(),
@@ -314,6 +317,7 @@ mod tests {
             modifiers: vec![],
             key: "V".to_string(),
             script: None,
+            shell: None,
         });
         let aliases = all_aliases(&cfg);
         let copy = aliases.iter().find(|a| a.phrase == "复制").unwrap();
@@ -330,6 +334,7 @@ mod tests {
             modifiers: vec![],
             key: "M".to_string(),
             script: None,
+            shell: None,
         });
         let aliases = all_aliases(&cfg);
         let first_user = aliases.iter().position(|a| a.source == AliasSource::User);

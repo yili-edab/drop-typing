@@ -12,8 +12,9 @@ use super::Modifier;
 /// Owned 版本的词表条目（替代旧的 `Lex`，字段使用 String/Vec 以支持运行时构建）。
 #[derive(Debug, Clone)]
 pub(super) enum LexOwned {
-    /// 动作别名：修饰键 + 按键；`script` 为预留的脚本执行钩子（Some 时优先执行脚本）
-    Action(Vec<Modifier>, String, Option<String>),
+    /// 动作别名：修饰键 + 按键；`script` 为脚本执行钩子（Some 时优先执行脚本），
+    /// `shell` 为单行命令解释器选择（cmd / powershell / zsh，仅一行命令生效）。
+    Action(Vec<Modifier>, String, Option<String>, Option<String>),
     Mod(Modifier),
     Key(String),
     Stop,
@@ -69,7 +70,12 @@ fn add_user_entries(
     for a in &cfg.action {
         main.push((
             a.phrase.clone(),
-            LexOwned::Action(a.modifiers.clone(), a.key.clone(), a.script.clone()),
+            LexOwned::Action(
+                a.modifiers.clone(),
+                a.key.clone(),
+                a.script.clone(),
+                a.shell.clone(),
+            ),
         ));
     }
     for m in &cfg.modifier {
@@ -92,7 +98,7 @@ fn add_user_entries(
 // ---------- 内置词表 ----------
 
 fn act(mods: Vec<Modifier>, key: &str) -> LexOwned {
-    LexOwned::Action(mods, key.to_string(), None)
+    LexOwned::Action(mods, key.to_string(), None, None)
 }
 
 fn add_builtin_main(entries: &mut Vec<(String, LexOwned)>) {

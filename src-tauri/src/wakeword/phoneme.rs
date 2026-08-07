@@ -14,7 +14,7 @@ use super::WakeWord;
 const DEFAULT_ENTRIES: &[(&str, &str, &str)] = &[
     ("小易记", "x iǎo y ì j ì @小易记", "input"),
     ("小易修", "x iǎo y ì x iū @小易修", "repair"),
-    ("小易控", "x iǎo y ì k òng @小易控", "command"),
+    ("小易小易", "x iǎo y ì x iǎo y ì @小易小易", "command"),
     ("小易确认", "x iǎo y ì q uè r èn @小易确认", "commit"),
     ("小易清空", "x iǎo y ì q īng k ōng @小易清空", "clear"),
 ];
@@ -45,7 +45,7 @@ mod tests {
         assert_eq!(map.len(), 5);
         assert_eq!(map[0].0, "小易记");
         assert_eq!(map[1].0, "小易修");
-        assert_eq!(map[2].0, "小易控");
+        assert_eq!(map[2].0, "小易小易");
         assert_eq!(map[3].0, "小易确认");
         assert_eq!(map[4].0, "小易清空");
     }

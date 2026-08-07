@@ -48,6 +48,11 @@ pub struct CommandActionEntry {
     /// 需 chmod +x）；或一行 shell 命令（交给 /bin/zsh -lc 执行）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+    /// 单行 shell 命令使用的解释器（仅对一行命令生效；脚本文件按扩展名执行）：
+    /// Windows 支持 `cmd`（默认）/ `powershell`，macOS 固定 `zsh`。
+    /// 未配置或值不合法时按平台默认（Windows cmd / macOS zsh）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -111,6 +116,15 @@ impl CommandConfig {
         };
         // 归一化到两位小数，避免 f32 历史值（如 0.699999988079071）在界面上显示难看
         (v * 100.0).round() / 100.0
+    }
+}
+
+/// 归一化脚本 shell 值：仅接受 cmd / powershell / zsh（大小写不敏感），
+/// 其余一律视为未配置（执行时走平台默认）。
+pub fn normalize_shell(shell: Option<&str>) -> Option<String> {
+    match shell.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some(s @ ("cmd" | "powershell" | "zsh")) => Some(s.to_string()),
+        _ => None,
     }
 }
 
@@ -753,11 +767,21 @@ mod tests {
 
     #[test]
     fn parse_config_file_accepts_action_with_script() {
-        let raw = "[[command.action]]\nphrase = \"跑备份\"\nmodifiers = []\nkey = \"C\"\nscript = \"/bin/sh backup.sh\"\n";
+        let raw = "[[command.action]]\nphrase = \"跑备份\"\nmodifiers = []\nkey = \"C\"\nscript = \"/bin/sh backup.sh\"\nshell = \"powershell\"\n";
         let cfg = parse_config_file(raw).expect("合法 TOML 应解析成功");
         let a = &cfg.command.action[0];
         assert_eq!(a.phrase, "跑备份");
         assert_eq!(a.script.as_deref(), Some("/bin/sh backup.sh"));
+        assert_eq!(a.shell.as_deref(), Some("powershell"));
+    }
+
+    #[test]
+    fn normalize_shell_accepts_known_and_rejects_unknown() {
+        assert_eq!(normalize_shell(Some("PowerShell")), Some("powershell".to_string()));
+        assert_eq!(normalize_shell(Some(" cmd ")), Some("cmd".to_string()));
+        assert_eq!(normalize_shell(Some("zsh")), Some("zsh".to_string()));
+        assert_eq!(normalize_shell(Some("bash")), None);
+        assert_eq!(normalize_shell(None), None);
     }
 
     #[test]
@@ -845,6 +869,7 @@ mod tests {
             modifiers: vec![],
             key: "C".to_string(),
             script: None,
+            shell: None,
         });
         let err = validate_action_uniqueness(&cfg).unwrap_err();
         assert!(err.contains("复制"), "应指向内置别名：{err}");
@@ -855,6 +880,7 @@ mod tests {
             modifiers: vec![],
             key: "C".to_string(),
             script: None,
+            shell: None,
         });
         let err = validate_action_uniqueness(&cfg).unwrap_err();
         assert!(err.contains("copy"), "大小写归一化后应判重：{err}");
@@ -868,12 +894,14 @@ mod tests {
             modifiers: vec![],
             key: "C".to_string(),
             script: None,
+            shell: None,
         });
         cfg.action.push(CommandActionEntry {
             phrase: "截图 ".to_string(),
             modifiers: vec![],
             key: "V".to_string(),
             script: None,
+            shell: None,
         });
         let err = validate_action_uniqueness(&cfg).unwrap_err();
         assert!(err.contains("重复"));
@@ -887,18 +915,21 @@ mod tests {
             modifiers: vec![],
             key: "C".to_string(),
             script: None,
+            shell: None,
         });
         cfg.action.push(CommandActionEntry {
             phrase: "跑备份".to_string(),
             modifiers: vec![],
             key: "C".to_string(),
             script: Some("backup.sh".to_string()),
+            shell: None,
         });
         cfg.action.push(CommandActionEntry {
             phrase: "  ".to_string(),
             modifiers: vec![],
             key: "C".to_string(),
             script: None,
+            shell: None,
         });
         assert!(validate_action_uniqueness(&cfg).is_ok());
     }

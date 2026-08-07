@@ -94,11 +94,15 @@ impl KeyCombo {
     }
 }
 
-/// 指令解析结果：按键组合，或预留的脚本执行钩子。
+/// 指令解析结果：按键组合，或脚本执行钩子（含单行命令解释器选择）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedCommand {
     Combo(KeyCombo),
-    Script(String),
+    Script {
+        command: String,
+        /// 单行命令解释器：cmd / powershell / zsh；None 走平台默认。
+        shell: Option<String>,
+    },
 }
 
 impl ParsedCommand {
@@ -106,14 +110,14 @@ impl ParsedCommand {
     pub fn display(&self) -> String {
         match self {
             ParsedCommand::Combo(c) => c.display(),
-            ParsedCommand::Script(s) => format!("SCRIPT:{s}"),
+            ParsedCommand::Script { command, .. } => format!("SCRIPT:{command}"),
         }
     }
 }
 
 /// 提取出的 token
 enum Tok {
-    Action(Vec<Modifier>, String, Option<String>),
+    Action(Vec<Modifier>, String, Option<String>, Option<String>),
     Mod(Modifier),
     Key(String),
 }
@@ -237,7 +241,9 @@ fn matched_len(rest: &str, use_homophones: bool, lexicon: &Lexicon) -> usize {
 
 fn push_tok(toks: &mut Vec<Tok>, lex: &LexOwned) {
     match lex {
-        LexOwned::Action(m, k, s) => toks.push(Tok::Action(m.clone(), k.clone(), s.clone())),
+        LexOwned::Action(m, k, s, sh) => {
+            toks.push(Tok::Action(m.clone(), k.clone(), s.clone(), sh.clone()))
+        }
         LexOwned::Mod(m) => toks.push(Tok::Mod(*m)),
         LexOwned::Key(k) => toks.push(Tok::Key(k.clone())),
         LexOwned::Stop => {}
@@ -252,10 +258,13 @@ fn assemble(toks: Vec<Tok>, unknown: usize, total: usize) -> Option<ParsedComman
     }
     // 动作别名优先（"复制一下" → CMD+C；带脚本的别名 → 脚本执行钩子）
     for t in &toks {
-        if let Tok::Action(m, k, s) = t {
+        if let Tok::Action(m, k, s, sh) = t {
             if let Some(script) = s {
                 if !script.trim().is_empty() {
-                    return Some(ParsedCommand::Script(script.clone()));
+                    return Some(ParsedCommand::Script {
+                        command: script.clone(),
+                        shell: sh.clone(),
+                    });
                 }
             }
             return Some(ParsedCommand::Combo(KeyCombo {
@@ -339,10 +348,13 @@ pub fn builtin_action_aliases() -> Vec<(String, ParsedCommand)> {
     lex.main
         .iter()
         .filter_map(|(phrase, entry)| match entry {
-            LexOwned::Action(m, k, s) => {
+            LexOwned::Action(m, k, s, sh) => {
                 let cmd = match s {
                     Some(script) if !script.trim().is_empty() => {
-                        ParsedCommand::Script(script.clone())
+                        ParsedCommand::Script {
+                            command: script.clone(),
+                            shell: sh.clone(),
+                        }
                     }
                     _ => ParsedCommand::Combo(KeyCombo {
                         modifiers: m.clone(),
@@ -436,10 +448,14 @@ mod tests {
             modifiers: vec![],
             key: "C".to_string(),
             script: Some("/bin/sh backup.sh".to_string()),
+            shell: Some("powershell".to_string()),
         });
         let lex = Lexicon::build(Some(&cfg));
         match parse("跑备份", &lex) {
-            Some(ParsedCommand::Script(path)) => assert_eq!(path, "/bin/sh backup.sh"),
+            Some(ParsedCommand::Script { command, shell }) => {
+                assert_eq!(command, "/bin/sh backup.sh");
+                assert_eq!(shell.as_deref(), Some("powershell"));
+            }
             other => panic!("期望 Script，实际 {other:?}"),
         }
     }
@@ -526,6 +542,7 @@ mod tests {
                 modifiers: vec![Modifier::Shift, Modifier::Command],
                 key: "4".into(),
                 script: None,
+                shell: None,
             }],
             ..Default::default()
         };
@@ -545,6 +562,7 @@ mod tests {
                 modifiers: vec![Modifier::Command],
                 key: "3".into(),
                 script: None,
+                shell: None,
             }],
             ..Default::default()
         };

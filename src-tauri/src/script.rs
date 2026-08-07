@@ -4,8 +4,8 @@
 //! - 已存在的脚本文件路径（绝对路径或 `~/` 开头）→ 按 shebang 直接执行，
 //!   工作目录为脚本所在目录；macOS/Linux 文件需有执行权限（否则提示 chmod +x），
 //!   Windows 上 `.bat/.cmd` 走 cmd.exe、`.ps1` 走 PowerShell；
-//! - 一行 shell 命令 → macOS 交给 `/bin/zsh -lc`，Windows 交给 `cmd.exe /C` 执行，
-//!   工作目录为用户主目录。
+//! - 一行 shell 命令 → macOS 交给 `/bin/zsh -lc`，Windows 默认交给 `cmd.exe /C`
+//!   执行（也可通过动作别名的 `shell` 字段指定 `powershell`），工作目录为用户主目录。
 //!
 //! 执行是阻塞式的（调用方应放在后台线程）；不设超时、不展示 stdout，
 //! 失败时返回退出码与截断的 stderr 摘要。
@@ -37,6 +37,12 @@ impl std::error::Error for ScriptError {}
 
 /// 阻塞式执行脚本：自动判断值是「文件路径」还是「一行命令」。
 pub fn run(script: &str) -> Result<(), ScriptError> {
+    run_with_shell(script, None)
+}
+
+/// 带单行命令解释器选择执行脚本（仅 Windows 一行命令生效；
+/// 脚本文件仍按扩展名执行，macOS 固定 zsh）。
+pub fn run_with_shell(script: &str, shell: Option<&str>) -> Result<(), ScriptError> {
     let script = script.trim();
     if script.is_empty() {
         return Err(ScriptError::new("脚本内容为空"));
@@ -45,7 +51,7 @@ pub fn run(script: &str) -> Result<(), ScriptError> {
     if let Some(path) = resolve_existing_file(script) {
         run_file(&path)
     } else {
-        run_shell_line(script)
+        run_shell_line(script, shell)
     }
 }
 
@@ -113,20 +119,35 @@ fn run_file(path: &Path) -> Result<(), ScriptError> {
 }
 
 #[cfg(target_os = "windows")]
-fn run_shell_line(line: &str) -> Result<(), ScriptError> {
+fn run_shell_line(line: &str, shell: Option<&str>) -> Result<(), ScriptError> {
     let cwd = home_dir().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
-    let output = Command::new("cmd")
-        .args(["/C", line])
-        .current_dir(cwd)
-        .output()
-        .map_err(|e| ScriptError::new(format!("无法启动 cmd.exe：{e}")))?;
+    use std::os::windows::process::CommandExt;
+    let normalized = crate::config::normalize_shell(shell);
+    let output = if normalized.as_deref() == Some("powershell") {
+        // PowerShell 的 -Command 按标准 argv 规则解析引号，Rust 默认参数加引号即可。
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", line])
+            .current_dir(cwd)
+            .output()
+            .map_err(|e| ScriptError::new(format!("无法启动 powershell：{e}")))?
+    } else {
+        // cmd.exe 的 /C 会按自己的规则剥离引号；Rust 默认会给含空格的参数再包一层引号
+        // 并把行内 " 双写，导致 start "" "带空格路径" 这类命令被解析坏（报找不到路径）。
+        // 因此整行必须原样拼接进命令行，不做二次转义。
+        Command::new("cmd")
+            .arg("/C")
+            .raw_arg(line.as_ref())
+            .current_dir(cwd)
+            .output()
+            .map_err(|e| ScriptError::new(format!("无法启动 cmd.exe：{e}")))?
+    };
     finish(output)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_shell_line(line: &str) -> Result<(), ScriptError> {
+fn run_shell_line(line: &str, _shell: Option<&str>) -> Result<(), ScriptError> {
     let cwd = home_dir().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
@@ -213,6 +234,37 @@ mod tests {
             msg.contains("not recognized") || msg.contains("不是内部或外部命令"),
             "应提示命令不存在：{msg}"
         );
+    }
+
+    /// 回归：带空标题 + 带空格引号路径的 start 必须原样到达 cmd.exe。
+    /// 修复前 Rust 会把整行再包一层引号，cmd /C 剥离后 start 找不到路径。
+    #[cfg(windows)]
+    #[test]
+    fn shell_line_with_quoted_path_not_mangled() {
+        let r = run(r#"start "" /b "%SystemRoot%\System32\cmd.exe" /c exit 0"#);
+        assert!(
+            r.is_ok(),
+            "带引号的 start 命令应原样执行，实际失败：{:?}",
+            r
+        );
+    }
+
+    /// 单行命令可指定 powershell 执行（含 exit 退出码透传）。
+    #[cfg(windows)]
+    #[test]
+    fn shell_line_powershell_selected() {
+        let err = run_with_shell("exit 7", Some("powershell")).unwrap_err();
+        assert!(err.to_string().contains("退出码 7"), "{err}");
+        let r = run_with_shell("$x = 1 + 1; exit 0", Some("powershell"));
+        assert!(r.is_ok(), "PowerShell 单行命令应正常执行：{r:?}");
+    }
+
+    /// 未指定 shell 时 Windows 仍默认走 cmd（保持既有行为）。
+    #[cfg(windows)]
+    #[test]
+    fn shell_line_defaults_to_cmd() {
+        let err = run_with_shell("exit 7", None).unwrap_err();
+        assert!(err.to_string().contains("退出码 7"), "{err}");
     }
 
     /// 在临时目录写一个可执行脚本，返回其绝对路径（仅 unix：需要 chmod）。

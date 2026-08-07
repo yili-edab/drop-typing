@@ -418,6 +418,10 @@ textarea:focus { outline: none; border-color: var(--sl-color-primary-500); box-s
   width: 220px;
   flex: none;
 }
+.lex-shell {
+  width: 130px;
+  flex: none;
+}
 .lex-rec {
   flex: none;
 }

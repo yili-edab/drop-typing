@@ -34,7 +34,7 @@
 - 倒计时时长可配置：`command_countdown_ms`（默认 1000）
 - 内置别名（macOS 上映射为 ⌘）：复制 / 粘贴 / 剪切 / 撤销 / 重做 / 全选 / 保存 / 回车（含 copy / paste / ctrl+c / ctrl+v / enter 等英文说法）
 - 组合键直说：如 "Shift Command E" → `SHIFT+CMD+E`；词表驱动扫描提取（非整句精确匹配），容忍中文说法（命令/控制/换挡/选项）、填充词（"按一下"）、连接词（"加/和/与"）、字母谐音（"西"→C）等 ASR 变形；unknown 占比过半判废防误触发
-- 动作别名支持脚本执行：`script` 可填已存在的脚本文件路径（绝对路径或 `~` 开头，按 shebang 执行、需可执行权限），也可直接填一行 shell 命令（如 `open https://example.com`）；与按键指令同样有倒计时确认，失败时黄底红字显示退出码与错误信息
+- 动作别名支持脚本执行：`script` 可填已存在的脚本文件路径（绝对路径或 `~` 开头，按 shebang 执行、需可执行权限），也可直接填一行 shell 命令（如 `open https://example.com`）；一行命令的解释器可用 `shell` 字段选择（Windows `cmd` / `powershell`，macOS 固定 `zsh`）；与按键指令同样有倒计时确认，失败时黄底红字显示退出码与错误信息
 - 未命中解析：黄底红字提示「未识别到按键指令」；右 ⇧ 短按无动作
 - 按键模拟复用 macOS 主线程调度约束（macOS 26 TSM 断言），支持字母/数字/F 键/方向键/Space/Tab/Esc/Enter/Delete
 
@@ -190,7 +190,7 @@ drop-typing/
 - App 运行期间，Win 单键、Win+E、Win+R 等系统快捷键保持可用；按住 Win+Alt 录音时开始菜单不会弹出（只有「属于 drop-typing 组合」的 Win 键事件会被拦截）。
 - 默认 Win+Shift 与系统截图 Win+Shift+S 存在键位冲突；如需保留系统截图，请把指令通道改为其它组合键。
 - 唤醒词模型随 NSIS 安装包分发；若直接运行裸 `drop-typing.exe`，需把项目里的 `src-tauri/models` 目录放在 exe 同目录。唤醒词加载或麦克风监听失败会在暂存条显示黄底红字提示。
-- script 动作：macOS 用 zsh（`/bin/zsh -lc`），Windows 用 `cmd.exe /C`；`.bat` / `.cmd` / `.ps1` 文件路径可直接执行。
+- script 动作：macOS 用 zsh（`/bin/zsh -lc`），Windows 默认用 `cmd.exe /C`（动作别名可配置 `shell = "powershell"` 改用 PowerShell 执行单行命令）；`.bat` / `.cmd` / `.ps1` 文件路径按扩展名直接执行，不受 shell 字段影响。
 
 ## 热键方案决策
 

@@ -1,7 +1,7 @@
 //! 唤醒词引擎抽象。
 //!
 //! 使用 sherpa-onnx KeywordSpotter 检测唤醒词。支持：
-//! - 内置默认唤醒词（小易记/小易修/小易控/小易确认/小易清空），通过 text2token 动态生成
+//! - 内置默认唤醒词（小易记/小易修/小易小易/小易确认/小易清空），通过 text2token 动态生成
 //! - 用户自定义唤醒词（配置文件中的 [[wakeword.keywords]]），通过 text2token 动态生成
 //!
 //! 启动逻辑：
@@ -79,7 +79,7 @@ pub enum WakeEvent {
 const BUILTIN_DEFAULTS: &[(&str, &str)] = &[
     ("小易记", "input"),
     ("小易修", "repair"),
-    ("小易控", "command"),
+    ("小易小易", "command"),
     ("小易确认", "commit"),
     ("小易清空", "clear"),
 ];
@@ -227,7 +227,7 @@ mod tests {
         let texts: Vec<&str> = BUILTIN_DEFAULTS.iter().map(|(t, _)| *t).collect();
         assert_eq!(
             texts,
-            vec!["小易记", "小易修", "小易控", "小易确认", "小易清空"]
+            vec!["小易记", "小易修", "小易小易", "小易确认", "小易清空"]
         );
         let actions: Vec<&str> = BUILTIN_DEFAULTS.iter().map(|(_, a)| *a).collect();
         assert_eq!(actions, vec!["input", "repair", "command", "commit", "clear"]);

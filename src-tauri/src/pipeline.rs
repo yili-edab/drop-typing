@@ -1891,9 +1891,9 @@ fn handle_lightning_hit(
     std::thread::spawn(move || {
         let result = match parsed {
             command::ParsedCommand::Combo(combo) => injector.simulate_combo(&combo),
-            command::ParsedCommand::Script(script_value) => {
+            command::ParsedCommand::Script { command, shell } => {
                 staging.set_status("执行中");
-                let r = script::run(&script_value)
+                let r = script::run_with_shell(&command, shell.as_deref())
                     .map_err(|e| anyhow::anyhow!("{e}"));
                 staging.set_status("");
                 r
@@ -1984,9 +1984,9 @@ fn run_command(
                     }
                 }
             }
-            command::ParsedCommand::Script(script_value) => {
+            command::ParsedCommand::Script { command, shell } => {
                 staging.set_status("执行中");
-                match script::run(&script_value) {
+                match script::run_with_shell(&command, shell.as_deref()) {
                     Ok(()) => {
                         staging.set_status("");
                         staging.committed();

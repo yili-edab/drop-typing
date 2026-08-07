@@ -558,7 +558,7 @@ mod tests {
         let items: Vec<(String, String)> = vec![
             ("小易记".into(), "小易记".into()),
             ("小易修".into(), "小易修".into()),
-            ("小易控".into(), "小易控".into()),
+            ("小易小易".into(), "小易小易".into()),
             ("小易确认".into(), "小易确认".into()),
             ("小易清空".into(), "小易清空".into()),
         ];
@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[0], "x iǎo y ì j ì @小易记");
         assert_eq!(lines[1], "x iǎo y ì x iū @小易修");
-        assert_eq!(lines[2], "x iǎo y ì k òng @小易控");
+        assert_eq!(lines[2], "x iǎo y ì x iǎo y ì @小易小易");
         assert_eq!(lines[3], "x iǎo y ì q uè r èn @小易确认");
         assert_eq!(lines[4], "x iǎo y ì q īng k ōng @小易清空");
 
@@ -585,13 +585,13 @@ mod tests {
         let expected = [
             ("小易记", "x iǎo y ì j ì @小易记"),
             ("小易修", "x iǎo y ì x iū @小易修"),
-            ("小易控", "x iǎo y ì k òng @小易控"),
+            ("小易小易", "x iǎo y ì x iǎo y ì @小易小易"),
             ("小易确认", "x iǎo y ì q uè r èn @小易确认"),
             ("小易清空", "x iǎo y ì q īng k ōng @小易清空"),
         ];
         for (keyword, expected_line) in expected {
             let line = t2t.convert(keyword, keyword).expect("转换");
-            assert_eq!(line, expected_line);
+            assert_eq!(line, expected_line, "小易小易 音素应与模型转换一致，实际：{line}");
         }
     }
 }

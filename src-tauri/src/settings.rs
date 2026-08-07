@@ -387,7 +387,7 @@ pub fn register_settings_handlers(app: &AppHandle) {
         let defaults: Vec<serde_json::Value> = vec![
             serde_json::json!({ "keyword": "小易记", "action": "input" }),
             serde_json::json!({ "keyword": "小易修", "action": "repair" }),
-            serde_json::json!({ "keyword": "小易控", "action": "command" }),
+            serde_json::json!({ "keyword": "小易小易", "action": "command" }),
             serde_json::json!({ "keyword": "小易确认", "action": "commit" }),
             serde_json::json!({ "keyword": "小易清空", "action": "clear" }),
         ];
@@ -970,6 +970,10 @@ pub fn register_settings_handlers(app: &AppHandle) {
                 }
                 if let Some(v) = cmd.lightning_threshold {
                     cmd.lightning_threshold = Some((v * 100.0).round() / 100.0);
+                }
+                // 归一化脚本解释器选择（仅接受 cmd / powershell / zsh，其余走平台默认）
+                for a in &mut cmd.action {
+                    a.shell = crate::config::normalize_shell(a.shell.as_deref());
                 }
                 crate::config::prune_lightning_disabled(&mut cmd);
                 let mut cfg = Config::load_lenient().0;

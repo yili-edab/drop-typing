@@ -517,6 +517,7 @@ interface CommandEntry {
   name?: string;
   letter?: string;
   script?: string;
+  shell?: string;
   mode?: 'hotkey' | 'script';
   distinguish_sides?: boolean;
 }
@@ -1000,6 +1001,54 @@ function actionErrorText(row: CommandEntry): string {
   return '';
 }
 
+/** 与后端 ParsedCommand::display() 一致的动作展示（闪电列表用，不随平台换 WIN/CMD）。 */
+function localActionDisplay(row: CommandEntry): string {
+  if (row.mode === 'script' || row.script) return `SCRIPT:${row.script || ''}`;
+  const mods = normalizeModifiers(row.modifiers || [], !!row.distinguish_sides);
+  const sorted = [...mods]
+    .sort((a, b) => CMD_MOD_ORDER.indexOf(a) - CMD_MOD_ORDER.indexOf(b));
+  const parts = sorted.map((m) => MOD_DISPLAY[m] || m.toUpperCase());
+  return [...parts, (row.key || '?').toUpperCase()].join('+');
+}
+
+/** 以当前动作别名（含未保存的增删改）重建闪电指令清单，保留后端算好的 token_line。 */
+function syncLightningItems() {
+  const prev = new Map<string, LightningItem>();
+  for (const it of lightningItems) prev.set(normalizePhrase(it.phrase), it);
+  const items: LightningItem[] = [];
+  const seen = new Set<string>();
+  for (const row of commandConfig.action) {
+    const phrase = (row.phrase || '').trim();
+    if (!phrase) continue;
+    const key = normalizePhrase(phrase);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const old = prev.get(key);
+    items.push({
+      phrase,
+      display: localActionDisplay(row),
+      builtin: false,
+      enabled: !isLightningDisabled(phrase),
+      token_line: old?.token_line ?? null,
+    });
+  }
+  for (const b of builtinActions) {
+    const key = normalizePhrase(b.phrase);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const old = prev.get(key);
+    items.push({
+      phrase: b.phrase,
+      display: b.display,
+      builtin: true,
+      enabled: !isLightningDisabled(b.phrase),
+      token_line: old?.token_line ?? null,
+    });
+  }
+  lightningItems = items;
+  renderLightningList();
+}
+
 function validateActionRows(): boolean {
   const seen = new Map<string, string>();
   for (const b of builtinActions) seen.set(normalizePhrase(b.phrase), b.phrase);
@@ -1152,7 +1201,36 @@ function renderLexRows(kind: string) {
         scriptInput.addEventListener('sl-input', (e: any) => {
           row.script = e.target.value?.trim() || '';
         });
+        scriptInput.addEventListener('sl-blur', () => syncLightningItems());
         el.appendChild(scriptInput);
+
+        // 单行命令解释器：Windows 可选 CMD / PowerShell，macOS 固定 ZSH
+        const shellSel = document.createElement('sl-select');
+        shellSel.className = 'lex-shell';
+        shellSel.size = 'small';
+        const win = isWindowsUI();
+        const shellOptions = win
+          ? [['cmd', 'CMD'], ['powershell', 'PowerShell']]
+          : [['zsh', 'ZSH']];
+        for (const [value, label] of shellOptions) {
+          const o = document.createElement('sl-option');
+          o.value = value;
+          o.textContent = label;
+          shellSel.appendChild(o);
+        }
+        const shellValue = shellOptions.some(([v]) => v === row.shell)
+          ? row.shell!
+          : (win ? 'cmd' : 'zsh');
+        shellSel.value = shellValue;
+        shellSel.disabled = !win;
+        shellSel.title = win
+          ? '单行命令使用的解释器；.bat/.cmd/.ps1 文件路径按扩展名执行，不受此选项影响'
+          : 'macOS 固定使用 ZSH；脚本文件按扩展名执行，不受此选项影响';
+        shellSel.addEventListener('sl-change', (e: any) => {
+          row.shell = e.target.value || shellValue;
+          syncLightningItems();
+        });
+        el.appendChild(shellSel);
       } else {
         // 快捷键：单个只读展示（非输入框）+ 直接录制
         const sideSwitch = document.createElement('sl-switch');
@@ -1259,6 +1337,8 @@ function renderLexRows(kind: string) {
 
     wrap.appendChild(el);
   });
+  // 动作别名增删改后，上方「闪电指令」清单同步刷新
+  if (kind === 'action') syncLightningItems();
 }
 
 function renderAllLex() {
@@ -1282,6 +1362,7 @@ function buildCommandPayload() {
       modifiers: normalizeModifiers(a.modifiers || [], !!a.distinguish_sides),
       key: a.key || '',
       script: a.script || null,
+      shell: a.shell || null,
     })),
     modifier: nonEmpty(commandConfig.modifier),
     key: nonEmpty(commandConfig.key),
@@ -1329,6 +1410,7 @@ listen<{
       action: (c.action || []).map((a: any) => ({
         ...a,
         script: a.script || '',
+        shell: a.shell || '',
         mode: a.script ? 'script' : 'hotkey',
         distinguish_sides: isPreciseMods(a.modifiers),
       })),
@@ -1357,6 +1439,9 @@ listen<{ success: boolean; error?: string }>('drop-typing://command-config-saved
   btnCommandSave.disabled = false;
   if (e.payload.success) {
     toast('success', '语音控制配置已保存并生效');
+    // 保存成功后重新拉取后端权威配置：动作别名已落盘，
+    // 闪电指令（含 token_line / 归一化后的显示）以上方清单为准整体刷新。
+    requestCommandConfig();
   } else {
     toast('danger', e.payload.error || '保存失败');
   }
@@ -1490,7 +1575,7 @@ wwEnabledSwitch.addEventListener('sl-change', () => {
 
 // 重置
 btnWakewordReset.addEventListener('click', async () => {
-  const ok = await showConfirm('确认将唤醒词重置为默认值（小易记/小易修/小易控/小易确认/小易清空）？当前修改将丢失。');
+  const ok = await showConfirm('确认将唤醒词重置为默认值（小易记/小易修/小易小易/小易确认/小易清空）？当前修改将丢失。');
   if (!ok) return;
   emit('drop-typing://reset-wakeword-config');
 });
